@@ -1,0 +1,115 @@
+html, body {
+  width: 100% !important;
+  height: 100% !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+  background: #000 !important;
+}
+
+#app, #root, #q-app, main, .main, .watch-page {
+  width: 100% !important;
+  height: 100% !important;
+  max-width: 100% !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+.jwplayer, .jw-player-wrapper, .jw-holder, .jw-media, .jw-video,
+.art-video-player, .video-js, .vjs-tech, video,
+iframe[src*="vlogphim"], iframe[src*="anime47"], iframe[src*="nonprofit"], iframe[src*="anime3s"] {
+  width: 100% !important;
+  height: 100% !important;
+  max-width: 100% !important;
+  max-height: 100% !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  padding-bottom: 0 !important;
+  padding-top: 0 !important;
+  top: 0 !important;
+  left: 0 !important;
+  transform: none !important;
+  background: #000 !important;
+}
+
+.player-section, .video-container, .watch-player {
+  width: 100% !important;
+  height: 100% !important;
+  max-width: 100% !important;
+  max-height: 100% !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  padding-bottom: 0 !important;
+  padding-top: 0 !important;
+  top: 0 !important;
+  left: 0 !important;
+  transform: none !important;
+  overflow: hidden !important;
+  background: #000 !important;
+}
+
+.player-wrapper {
+  width: 100% !important;
+  height: 100% !important;
+  max-width: 100% !important;
+  max-height: 100% !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  padding-bottom: 0 !important;
+  padding-top: 0 !important;
+  top: 0 !important;
+  left: 0 !important;
+  transform: none !important;
+  background: #000 !important;
+}
+
+.watch-player {
+  display: flex !important;
+  flex-direction: column !important;
+}
+
+.watch-player > .player-wrapper,
+.watch-player > .player-wrapper.jw-active,
+.watch-player > .jw-player-wrapper,
+.watch-player > .jwplayer,
+.watch-player .player-wrapper.jw-active {
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+  height: auto !important;
+}
+
+div[role="dialog"], div[role="alertdialog"], .modal, .popup, .overlay-ads,
+[class*="ad-"], [id*="ad-"] {
+  display: none !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+header, nav, .header, #header, .navbar, .nav, #nav, .menu, #menu, .top-bar, .head,
+.q-header, .q-footer, .q-drawer,
+.ads, .ad, .banner, .overlay-ads, [class*="ad-"], [id*="ad-"],
+.watch-player .player-controls, .watch-player .server-section, .watch-player .functional-section, 
+.player-controls, .server-section, .functional-section, .watch-player > .q-card:not(:first-child) {
+  display: none !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+  height: 0 !important;
+  width: 0 !important;
+}
+
+.jw-overlays,
+.jw-display,
+.jw-controls,
+.jw-display-icon-container,
+.jw-icon-display,
+video {
+  pointer-events: auto !important;
+}
+
+.jw-wrapper,
+.jw-media,
+.jwplayer {
+  background: #000 !important;
+}

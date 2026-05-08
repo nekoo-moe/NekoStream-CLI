@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NekoStream CLI Player</title>
+  <style>
+    body, html {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      background-color: #000;
+      overflow: hidden;
+      font-family: sans-serif;
+    }
+    #player-container {
+      width: 100%;
+      height: 100%;
+    }
+    webview {
+      width: 100%;
+      height: 100%;
+      border: none;
+    }
+    #close-btn {
+      position: absolute;
+      top: 20px;
+      right: 20px;
+      z-index: 9999;
+      background: rgba(0, 0, 0, 0.5);
+      color: white;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      padding: 8px 16px;
+      cursor: pointer;
+      border-radius: 4px;
+      font-size: 14px;
+      transition: background 0.2s;
+      -webkit-app-region: no-drag;
+    }
+    #close-btn:hover {
+      background: rgba(255, 0, 0, 0.7);
+    }
+    .drag-region {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 80px;
+      height: 40px;
+      -webkit-app-region: drag;
+      z-index: 9998;
+    }
+    #loading-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: #000;
+      z-index: 9997;
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      color: #fff;
+      transition: opacity 0.5s ease;
+    }
+    .spinner {
+      width: 40px;
+      height: 40px;
+      border: 4px solid rgba(255, 255, 255, 0.1);
+      border-top: 4px solid #E11D48;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+      margin-bottom: 20px;
+    }
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+    .loading-text {
+      font-size: 16px;
+      color: #aaa;
+      letter-spacing: 1px;
+    }
+  </style>
+  <script src="../node_modules/hls.js/dist/hls.min.js"></script>
+  <script src="../node_modules/artplayer/dist/artplayer.js"></script>
+</head>
+<body>
+  <div class="drag-region"></div>
+  <button id="close-btn" onclick="window.close()">Close X</button>
+  <div id="loading-overlay">
+    <div class="spinner"></div>
+    <div class="loading-text">Đang tải và làm sạch trình phát...</div>
+  </div>
+  <div id="player-container"></div>
+
+  <script>
+    window.initPlayer = function(streamInfo) {
+      const container = document.getElementById('player-container');
+      
+      if (streamInfo.type === 'iframe') {
+        const overlay = document.getElementById('loading-overlay');
+        overlay.style.display = 'flex';
+        
+        // Hide overlay after 5.5 seconds (gives enough time for Anime47 SPA to load and isolate.js to clean up)
+        setTimeout(() => {
+          overlay.style.opacity = '0';
+          setTimeout(() => {
+            overlay.style.display = 'none';
+          }, 500);
+        }, 5500);
+
+        // Embed webview for iframe streams (like Anime47)
+        const webview = document.createElement('webview');
+        webview.setAttribute('src', streamInfo.url);
+        if (streamInfo.headers && streamInfo.headers.Referer) {
+          webview.setAttribute('httpreferrer', streamInfo.headers.Referer);
+        }
+        webview.setAttribute('allowpopups', 'false');
+        webview.setAttribute('disablewebsecurity', '');
+        
+        webview.addEventListener('dom-ready', () => {
+          try {
+            const fs = require('fs');
+            const path = require('path');
+            const css = fs.readFileSync(path.join(__dirname, 'isolate.css'), 'utf-8');
+            const js = fs.readFileSync(path.join(__dirname, 'isolate.js'), 'utf-8');
+            webview.insertCSS(css);
+            webview.executeJavaScript(js);
+          } catch (e) {
+            console.error('Failed to inject isolation script:', e);
+          }
+        });
+
+        container.appendChild(webview);
+      } else {
+        // Use Artplayer for m3u8 / mp4
+        const art = new Artplayer({
+          container: container,
+          url: streamInfo.url,
+          title: streamInfo.provider || 'NekoStream CLI',
+          poster: '',
+          volume: 0.5,
+          isLive: false,
+          muted: false,
+          autoplay: true,
+          pip: true,
+          autoSize: true,
+          autoMini: true,
+          setting: true,
+          loop: false,
+          flip: true,
+          playbackRate: true,
+          aspectRatio: true,
+          fullscreen: true,
+          fullscreenWeb: true,
+          subtitleOffset: true,
+          miniProgressBar: true,
+          mutex: true,
+          backdrop: true,
+          playsInline: true,
+          autoPlayback: true,
+          airplay: true,
+          theme: '#ff0055',
+          customType: {
+            m3u8: function(video, url) {
+              if (Hls.isSupported()) {
+                const hls = new Hls({
+                  xhrSetup: function(xhr, url) {
+                    // Note: headers are already intercepted in main process
+                  }
+                });
+                hls.loadSource(url);
+                hls.attachMedia(video);
+                hls.on(Hls.Events.MANIFEST_PARSED, function() {
+                  video.play().catch(() => {});
+                });
+              } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                video.src = url;
+                video.play().catch(() => {});
+              }
+            }
+          }
+        });
+        
+        art.on('ready', () => {
+          art.play();
+        });
+      }
+    };
+  </script>
+</body>
+</html>
