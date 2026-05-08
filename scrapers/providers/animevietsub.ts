@@ -1032,11 +1032,17 @@ export class AnimeVietsubProvider extends BaseScraper {
         // Extract episode number from text or URL
         const numMatch = text.match(/^(\d+)$/) || 
                          title.match(/Tập\s*(\d+)/i) ||
-                         href.match(/tap-(\d+)/i)
-        if (!numMatch) return
+                         href.match(/tap-(\d+)/i) ||
+                         href.match(/-(\d+)$/)
         
-        const number = parseInt(numMatch[1])
-        if (isNaN(number) || seenNumbers.has(number)) return
+        let number = numMatch ? parseInt(numMatch[1]) : 0
+        if (!number || isNaN(number)) {
+          number = seenNumbers.size > 0 ? Math.max(...Array.from(seenNumbers)) + 1 : 1
+        }
+        
+        while (seenNumbers.has(number)) {
+          number++
+        }
         seenNumbers.add(number)
         
         // Create a unique episode ID

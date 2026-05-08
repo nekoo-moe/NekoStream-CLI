@@ -404,8 +404,10 @@ export class AnimehayProvider extends BaseScraper {
         if (!episodeId || seen.has(episodeId)) return
         seen.add(episodeId)
 
-        const number = this.extractEpisodeNumber(href)
-        if (!number) return
+        let number = this.extractEpisodeNumber(href)
+        if (!number || isNaN(number)) {
+          number = episodes.length > 0 ? Math.max(...episodes.map(e => e.number)) + 1 : 1
+        }
 
         let labelText = $(el).text().trim()
         

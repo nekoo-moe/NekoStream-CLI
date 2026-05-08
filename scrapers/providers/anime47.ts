@@ -362,8 +362,10 @@ export class Anime47Provider extends BaseScraper {
     const episodes: Episode[] = []
     $('a[href*="/xem/"][href*="/ep-"]').each((_, el) => {
       const href = this.absolutizeUrl($(el).attr('href') || '')
-      const number = Number(href.match(/\/ep-(\d+)-/i)?.[1] || $(el).text().match(/(\d+)/)?.[1] || 0)
-      if (!number) return
+      let number = Number(href.match(/\/ep-(\d+)-/i)?.[1] || $(el).text().match(/(\d+)/)?.[1] || 0)
+      if (!number || isNaN(number)) {
+        number = episodes.length > 0 ? Math.max(...episodes.map(e => e.number)) + 1 : 1
+      }
       episodes.push({
         id: String(href.match(/ep-\d+-(\d+)/i)?.[1] || `${animeId}-ep-${number}`),
         animeId,
@@ -571,9 +573,12 @@ export class Anime47Provider extends BaseScraper {
                 for (const group of team.groups) {
                   if (Array.isArray(group.episodes)) {
                     for (const ep of group.episodes) {
-                      const number = Number(ep.number || ep.episodeNumber || 0)
+                      let number = Number(ep.number || ep.episodeNumber || 0)
                       const link = String(ep.link || '')
-                      if (number && link) {
+                      if (!number || isNaN(number)) {
+                        number = episodes.length > 0 ? Math.max(...episodes.map(e => e.number)) + 1 : 1
+                      }
+                      if (link) {
                         episodes.push({
                           id: String(ep.id || link.match(/ep-\d+-(\d+)/i)?.[1] || `${animeId}-ep-${number}`),
                           animeId,
@@ -618,8 +623,11 @@ export class Anime47Provider extends BaseScraper {
       if (detailData?.latestEpisodes && typeof detailData.latestEpisodes === 'object') {
         Object.values(detailData.latestEpisodes).forEach((ep: any) => {
           const link = this.absolutizeUrl(String(ep?.link || ''))
-          const number = Number(ep?.episodeNumber || ep?.title || 0)
-          if (!link || !number) return
+          let number = Number(ep?.episodeNumber || ep?.title || 0)
+          if (!link) return
+          if (!number || isNaN(number)) {
+            number = episodes.length > 0 ? Math.max(...episodes.map(e => e.number)) + 1 : 1
+          }
           episodes.push({
             id: String(ep?.id || link.match(/ep-\d+-(\d+)/i)?.[1] || `${animeId}-ep-${number}`),
             animeId,
