@@ -1,6 +1,14 @@
 [
   {
     "provider": "animevietsub",
+    "animeId": "marriagetoxin-a5934",
+    "animeTitle": "Mai Mối Cho Độc Sư",
+    "episodeId": "113077",
+    "episodeTitle": "Tập 03",
+    "timestamp": 1778286375942
+  },
+  {
+    "provider": "animevietsub",
     "animeId": "class-de-2-banme-ni-kawaii-onnanoko-to-tomodachi-ni-natta-a5907",
     "animeTitle": "Class de 2-banme ni Kawaii Onnanoko to Tomodachi ni Natta",
     "episodeId": "112899",

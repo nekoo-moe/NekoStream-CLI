@@ -92,11 +92,12 @@ export class AnimeVietsubProvider extends BaseScraper {
   ): Record<string, string> {
     const p = profile ?? pickRandomProfile()
     const cookieHeader = null
-    return {
+    let headers: Record<string, string> = {
       ...buildProfileHeaders(p, `${this.baseUrl}/`),
-      ...(cookieHeader ? { Cookie: cookieHeader } : {}),
       ...extraHeaders,
     }
+    if (cookieHeader) headers['Cookie'] = cookieHeader
+    return headers
   }
 
   private isLikelyAdUrl(urlText: string): boolean {

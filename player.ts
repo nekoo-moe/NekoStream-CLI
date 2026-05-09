@@ -4,7 +4,10 @@ import type { StreamInfo } from './scrapers/base'
 
 export async function launchPlayer(streamInfo: StreamInfo) {
   return new Promise<void>((resolve, reject) => {
-    const mainScript = path.join(__dirname, 'player-main.js')
+    // If compiled, __dirname is .../dist. If dev, __dirname is root.
+    const isCompiled = __dirname.endsWith('dist') || __dirname.endsWith('dist\\') || __dirname.endsWith('dist/')
+    const basePath = isCompiled ? path.join(__dirname, '..') : __dirname
+    const mainScript = path.join(basePath, 'player-main.js')
 
     const env = {
       ...process.env,

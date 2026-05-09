@@ -85,7 +85,7 @@ export class PlaywrightCrawler extends EventEmitter {
       // Override languages
       Object.defineProperty(navigator, 'languages', {
         get: () => ['vi-VN', 'vi', 'en-US', 'en']
-      })
+      });
 
       // Override chrome
       (window as any).chrome = {
