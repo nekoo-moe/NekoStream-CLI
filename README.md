@@ -4,14 +4,11 @@
 
 1. Clone code:
    ```bash
-   git clone https://github.com/NekoTech-Foundation/NekoStream-CLI.git
-   cd NekoStream-CLI
-   ```
-2. Cài dependencies:
-   ```bash
-   npm install
+   npm install -g nekostream-cli
    ```
 3. Chạy ứng dụng:
    ```bash
-   npm start
+   nekostream
    ```
+
+## Dự án không nhằm mục đích thương mại hóa, chúng tôi (NekoTech) không nắm giữ máy chủ của Provider nào
