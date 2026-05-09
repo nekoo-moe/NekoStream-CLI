@@ -1,6 +1,6 @@
 {
   "name": "nekostream-cli",
-  "version": "1.0.3",
+  "version": "1.0.5",
   "description": "CLI version of NekoStream",
   "main": "dist/index.js",
   "bin": {
