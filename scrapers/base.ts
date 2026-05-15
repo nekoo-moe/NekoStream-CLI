@@ -82,6 +82,8 @@ export interface StreamInfo {
     quality: string
     bandwidth?: number
   }>
+  /** localStorage snapshot for SPA auth injection (used by iframe player) */
+  localStorageState?: Record<string, string>
 }
 
 export abstract class BaseScraper {

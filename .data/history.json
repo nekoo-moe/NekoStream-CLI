@@ -1,5 +1,29 @@
 [
   {
+    "provider": "anime47",
+    "animeId": "android-wa-keiken-ninzuu-ni-hairimasu-ka-m10264",
+    "animeTitle": "01",
+    "episodeId": "117377",
+    "episodeTitle": "01",
+    "timestamp": 1778851212748
+  },
+  {
+    "provider": "anime47",
+    "animeId": "10298",
+    "animeTitle": "01",
+    "episodeId": "117820",
+    "episodeTitle": "01",
+    "timestamp": 1778850366059
+  },
+  {
+    "provider": "anime47",
+    "animeId": "chou-kaguya-hime-m10298",
+    "animeTitle": "01",
+    "episodeId": "117820",
+    "episodeTitle": "01",
+    "timestamp": 1778849759965
+  },
+  {
     "provider": "animevietsub",
     "animeId": "marriagetoxin-a5934",
     "animeTitle": "Mai Mối Cho Độc Sư",

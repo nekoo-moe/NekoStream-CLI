@@ -27,7 +27,7 @@ import { extractVideoFromJS, fetchM3U8 } from '../interceptor'
 
 import { externalApi } from '../external-api'
 import { enrichWithAniList } from '../anilist'
-// Auth services removed for standalone CLI
+import { getProviderCookieHeader } from '../auth-service'
 // Extended AnimeDetail with additional metadata
 export interface AnimeDetailExtended extends AnimeDetail {
   descriptionVi?: string
@@ -91,7 +91,7 @@ export class AnimeVietsubProvider extends BaseScraper {
     profile?: BrowserProfile
   ): Record<string, string> {
     const p = profile ?? pickRandomProfile()
-    const cookieHeader = null
+    const cookieHeader = getProviderCookieHeader('animevietsub')
     let headers: Record<string, string> = {
       ...buildProfileHeaders(p, `${this.baseUrl}/`),
       ...extraHeaders,

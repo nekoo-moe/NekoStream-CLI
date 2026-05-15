@@ -6,6 +6,17 @@ import { launchPlayer } from './player'
 import { clearScreen, printBanner, drawAnimeCard } from './ui'
 import { loadSettings, saveSettings, loadHistory, saveHistoryEntry, clearHistory } from './storage'
 import type { AnimeDetail, AnimeSearchResult } from './scrapers/base'
+import {
+  getAuthStatus,
+  logoutProvider,
+  loginAnimeVietsubInteractive,
+  loginAnime47Interactive,
+  fetchAllAnimeVietsubList,
+  fetchAnimeVietsubNotifications,
+  fetchAllAnime47List,
+  fetchAnime47Notifications,
+  type UserDataItem
+} from './scrapers/auth-service'
 
 async function sleep(ms: number) {
   return new Promise(resolve => setTimeout(resolve, ms))
@@ -208,15 +219,21 @@ async function openAnimeMenu(providerName: string, animeId: string) {
 
   try {
     episodes = await provider.getEpisodes(animeId)
-    if (provider.getAnimeDetail) {
-      selectedAnime = await provider.getAnimeDetail(animeId)
-    }
     epsSpinner.stop()
   } catch (e) {
     epsSpinner.stop()
     console.log(chalk.red('\nFailed to fetch episodes: ' + e))
     await sleep(2000)
     return
+  }
+
+  // Detail is non-fatal — 401 on detail page shouldn't block episode viewing
+  if (provider.getAnimeDetail) {
+    try {
+      selectedAnime = await provider.getAnimeDetail(animeId)
+    } catch {
+      // silently skip — detail unavailable but episodes still work
+    }
   }
 
   if (!episodes || episodes.length === 0) {
@@ -340,6 +357,189 @@ async function openAnimeMenu(providerName: string, animeId: string) {
   }
 }
 
+/** Display a paginated interactive list of UserDataItems — user can select to watch */
+async function showUserDataList(title: string, items: UserDataItem[], providerName: string): Promise<void> {
+  if (items.length === 0) {
+    console.log(chalk.yellow('\n  (Danh sách trống)'))
+    await sleep(1500)
+    return
+  }
+
+  const PAGE_SIZE = 20
+  let offset = 0
+
+  while (true) {
+    clearScreen()
+    printBanner(title, `${items.length} anime`)
+
+    const page = items.slice(offset, offset + PAGE_SIZE)
+    const choices = page.map((item, i) => {
+      const ep = item.episodeNumber ? chalk.gray(` [Tập ${item.episodeNumber}]`) : ''
+      const status = item.status ? chalk.cyan(` (${item.status})`) : ''
+      return {
+        title: `${chalk.bold(String(offset + i + 1).padStart(3))}. ${item.title}${ep}${status}`,
+        value: item.animeId
+      }
+    })
+
+    if (offset + PAGE_SIZE < items.length)
+      choices.push({ title: chalk.yellow(`▼ Xem thêm (${items.length - offset - PAGE_SIZE} còn lại)`), value: '__next__' })
+    if (offset > 0)
+      choices.push({ title: chalk.yellow('▲ Trang trước'), value: '__prev__' })
+    choices.push({ title: chalk.gray('← Quay lại'), value: '__back__' })
+
+    const { animeId } = await prompts({
+      type: 'select',
+      name: 'animeId',
+      message: 'Chọn anime để xem (Esc để quay lại)',
+      choices
+    })
+
+    if (!animeId || animeId === '__back__') break
+    if (animeId === '__next__') { offset = Math.min(offset + PAGE_SIZE, items.length - 1); continue }
+    if (animeId === '__prev__') { offset = Math.max(0, offset - PAGE_SIZE); continue }
+
+    // Open anime detail & episode selection
+    await openAnimeMenu(providerName, animeId)
+  }
+}
+
+async function showProviderAccountMenu(provider: 'animevietsub' | 'anime47'): Promise<void> {
+  const label = provider === 'animevietsub' ? 'AnimeVietsub' : 'Anime47'
+
+  while (true) {
+    clearScreen()
+    const status = getAuthStatus(provider)
+    const loginLabel = status.loggedIn
+      ? chalk.green(`✅ ${status.userDisplayName || 'Đã đăng nhập'} (${status.cookieCount} cookies)`)
+      : chalk.red('❌ Chưa đăng nhập')
+
+    printBanner(`${label} — Account`, loginLabel)
+
+    const choices = status.loggedIn
+      ? [
+          { title: 'Hộp phim / Yêu thích', value: 'favorites' },
+          { title: 'Lịch sử xem', value: 'history' },
+          ...(provider === 'animevietsub' ? [] : [
+            { title: 'Đang xem', value: 'watching' },
+            { title: 'Hoàn thành', value: 'completed' },
+            { title: 'Dự định xem', value: 'plan_to_watch' },
+          ]),
+          { title: 'Thông báo', value: 'notifications' },
+          { title: chalk.red('Đăng xuất'), value: 'logout' },
+          { title: chalk.gray('Quay lại'), value: 'back' }
+        ]
+      : [
+          { title: chalk.cyan('🔑 Đăng nhập'), value: 'login' },
+          { title: chalk.gray('Quay lại'), value: 'back' }
+        ]
+
+    const { action } = await prompts({ type: 'select', name: 'action', message: `${label} — Chọn hành động`, choices })
+    if (!action || action === 'back') break
+
+    if (action === 'login') {
+      try {
+        const result = provider === 'animevietsub'
+          ? await loginAnimeVietsubInteractive()
+          : await loginAnime47Interactive()
+        console.log(chalk.green(`\n✅ Đăng nhập thành công!`))
+        if (result.userDisplayName) console.log(chalk.cyan(`   Xin chào, ${result.userDisplayName}!`))
+      } catch (e) {
+        console.log(chalk.red(`\n❌ Đăng nhập thất bại: ${e}`))
+      }
+      await sleep(2000)
+      continue
+    }
+
+    if (action === 'logout') {
+      logoutProvider(provider)
+      console.log(chalk.yellow(`\n👋 Đã đăng xuất khỏi ${label}.`))
+      await sleep(1500)
+      break
+    }
+
+    // Data fetching actions
+    const spinner = ora(`Đang tải dữ liệu từ ${label}...`).start()
+    try {
+      if (provider === 'animevietsub') {
+        if (action === 'notifications') {
+          const res = await fetchAnimeVietsubNotifications()
+          spinner.stop()
+          await showUserDataList('Thông báo — AnimeVietsub', res.items, provider)
+        } else {
+          const listType = action as 'favorites' | 'history'
+          const res = await fetchAllAnimeVietsubList(listType)
+          spinner.stop()
+          const titleMap = { favorites: 'Hộp phim / Yêu thích', history: 'Lịch sử xem' }
+          if (!res.success) {
+            console.log(chalk.red(`\n❌ ${res.error}`))
+            await sleep(2000)
+          } else {
+            await showUserDataList(`${titleMap[listType]} — AnimeVietsub`, res.items, provider)
+          }
+        }
+      } else {
+        if (action === 'notifications') {
+          const res = await fetchAnime47Notifications()
+          spinner.stop()
+          await showUserDataList('Thông báo — Anime47', res.notifications?.map(n => ({
+            animeId: n.animeId || '', title: n.title, url: n.url, thumbnail: n.thumbnail
+          })) || [], provider)
+        } else {
+          const { fetchAllAnime47List: fetchList } = await import('./scrapers/auth-service')
+          const res = await fetchList(action as any)
+          spinner.stop()
+          const titleMap: Record<string, string> = {
+            favorites: 'Yêu thích', history: 'Lịch sử xem',
+            watching: 'Đang xem', completed: 'Hoàn thành', plan_to_watch: 'Dự định xem'
+          }
+          if (!res.success) {
+            console.log(chalk.red(`\n❌ ${res.error}`))
+            await sleep(2000)
+          } else {
+            await showUserDataList(`${titleMap[action] || action} — Anime47`, res.items, provider)
+          }
+        }
+      }
+    } catch (e) {
+      spinner.stop()
+      console.log(chalk.red(`\n❌ Lỗi: ${e}`))
+      await sleep(2000)
+    }
+  }
+}
+
+async function showAccountMenu(): Promise<void> {
+  while (true) {
+    clearScreen()
+    const avsStatus = getAuthStatus('animevietsub')
+    const a47Status = getAuthStatus('anime47')
+
+    const avsLabel = avsStatus.loggedIn
+      ? chalk.green(`✅ ${avsStatus.userDisplayName || 'Đã đăng nhập'}`)
+      : chalk.red('❌ Chưa đăng nhập')
+    const a47Label = a47Status.loggedIn
+      ? chalk.green(`✅ ${a47Status.userDisplayName || 'Đã đăng nhập'}`)
+      : chalk.red('❌ Chưa đăng nhập')
+
+    printBanner('👤 Account', 'Quản lý tài khoản theo nhà cung cấp')
+
+    const { provider } = await prompts({
+      type: 'select',
+      name: 'provider',
+      message: 'Chọn nhà cung cấp',
+      choices: [
+        { title: `AnimeVietsub — ${avsLabel}`, value: 'animevietsub' },
+        { title: `Anime47 — ${a47Label}`, value: 'anime47' },
+        { title: chalk.gray('Quay lại Home'), value: 'back' }
+      ]
+    })
+
+    if (!provider || provider === 'back') break
+    await showProviderAccountMenu(provider as 'animevietsub' | 'anime47')
+  }
+}
+
 async function main() {
   let settings = loadSettings()
   let currentProviderName = settings.defaultProvider
@@ -357,6 +557,7 @@ async function main() {
         { title: 'Trending Now', value: 'trending' },
         { title: 'Recently Added', value: 'latest' },
         { title: 'Continue Watching (History)', value: 'history' },
+        { title: '👤 Account', value: 'account' },
         { title: 'Settings', value: 'settings' },
         { title: 'Change Provider', value: 'change_provider' },
         { title: chalk.red('Exit'), value: 'exit' }
@@ -416,6 +617,10 @@ async function main() {
 
     if (action === 'history') {
       await showHistoryMenu()
+    }
+
+    if (action === 'account') {
+      await showAccountMenu()
     }
 
     if (action === 'settings') {

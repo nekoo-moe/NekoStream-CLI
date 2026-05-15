@@ -2,6 +2,8 @@ import * as cheerio from 'cheerio'
 import { BaseScraper, AnimeSearchResult, AnimeDetail, Episode, VideoServer, StreamInfo } from '../base'
 import { fetchM3U8 } from '../interceptor'
 import { enrichWithAniList } from '../anilist'
+import { getProviderCookieHeader, getProviderToken, loadAuthSession } from '../../storage'
+import { fetchA47Page, interceptA47StreamUrl } from '../auth-service'
 
 type AnimeCachePayload = {
   id: string
@@ -77,19 +79,30 @@ export class Anime47Provider extends BaseScraper {
   }
 
   private get headers() {
-    return {
+    const base = {
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
       Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
       'Accept-Language': 'vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7',
       Referer: this.baseUrl + '/'
+    } as Record<string, string>
+    // Prefer Bearer token (JWT) over Cookie — anime47 uses JWT auth
+    const token = getProviderToken('anime47')
+    if (token) {
+      base['Authorization'] = `Bearer ${token}`
+    } else {
+      const cookie = getProviderCookieHeader('anime47')
+      if (cookie) base['Cookie'] = cookie
     }
+    return base
   }
 
   private get jsonHeaders() {
-    return {
+    const base = {
       ...this.headers,
-      Accept: 'application/json, text/plain, */*'
+      Accept: 'application/json, text/plain, */*',
+      Origin: this.baseUrl
     }
+    return base
   }
 
   private parseHtml(html: string): cheerio.CheerioAPI {
@@ -124,7 +137,21 @@ export class Anime47Provider extends BaseScraper {
     }
   }
 
+  /**
+   * Fetch HTML for a given URL.
+   * When JWT is available, uses Playwright headless (fetchA47Page) to inject
+   * the token into localStorage before navigation — the only reliable way to
+   * authenticate anime47 SPA HTML pages.
+   * Falls back to standard fetch (Bearer header) for unauthenticated or API routes.
+   */
   private async fetchHtml(url: string, options: { timeoutMs?: number; retries?: number } = {}): Promise<string> {
+    const token = getProviderToken('anime47')
+    if (token) {
+      const html = await fetchA47Page(url)
+      if (html) return html
+      // If Playwright failed (e.g. redirected to login), try standard fetch as last resort
+    }
+    // Standard fetch fallback (for unauthenticated access or if Playwright fails)
     const timeoutMs = options.timeoutMs ?? 25000
     const retries = options.retries ?? 1
     let lastError: unknown
@@ -332,11 +359,20 @@ export class Anime47Provider extends BaseScraper {
 
       const $root = $a.closest('article, li, .item, .card, .swiper-slide, div')
       const $img = $a.find('img').first().length ? $a.find('img').first() : $root.find('img').first()
+      
+      // Clean up text by cloning and removing noisy Quasar elements (icons, badges, ranks)
+      const $cleanA = $a.clone()
+      $cleanA.find('i, .q-icon, .q-badge, .status, .episode, img, .text-caption').remove()
+      let cleanText = $cleanA.text().replace(/\s+/g, ' ').trim()
+      // Remove leading digits (often used for ranking in trending lists like "01One Piece")
+      cleanText = cleanText.replace(/^\d{1,2}(?=[A-Z])/i, '')
+
       const title =
         $a.attr('title')?.trim() ||
-        $root.find('h1, h2, h3, .title, .name').first().text().trim() ||
+        $root.find('h1, h2, h3, .title, .name, .text-subtitle1, .text-subtitle2').first().text().trim() ||
         $img.attr('alt')?.trim() ||
-        $a.text().trim()
+        cleanText
+
       if (!title || title.length < 2) return
 
       seen.add(id)
@@ -441,26 +477,28 @@ export class Anime47Provider extends BaseScraper {
       console.warn('[Anime47] search api failed:', error)
     }
 
-    // Secondary fallback: parse page HTML
-    const urls = [
-      `${this.baseUrl}/tim-kiem/${encodeURIComponent(q)}`,
-      `${this.baseUrl}/tim-kiem?q=${encodeURIComponent(q)}`,
-      `${this.baseUrl}/filter?keyword=${encodeURIComponent(q)}`
-    ]
+    // Secondary fallback: parse page HTML (only when API returned no results)
+    if (merged.length === 0) {
+      const urls = [
+        `${this.baseUrl}/tim-kiem/${encodeURIComponent(q)}`,
+        `${this.baseUrl}/filter?keyword=${encodeURIComponent(q)}`
+      ]
 
-    for (const url of urls) {
-      try {
-        const html = await this.fetchHtml(url, { retries: 1 })
-        const state = this.extractInitialState(html)
-        const stateResults = this.extractListsFromState(state)
-          .flat()
-          .map((item) => this.mapStateAnime(item))
-          .filter((v): v is AnimeSearchResult => Boolean(v))
-        const htmlResults = this.parseAnimeCardsFromHtml(html)
+      for (const url of urls) {
+        try {
+          const html = await this.fetchHtml(url, { retries: 1 })
+          const state = this.extractInitialState(html)
+          const stateResults = this.extractListsFromState(state)
+            .flat()
+            .map((item) => this.mapStateAnime(item))
+            .filter((v): v is AnimeSearchResult => Boolean(v))
+          const htmlResults = this.parseAnimeCardsFromHtml(html)
 
-        for (const item of [...stateResults, ...htmlResults]) addResult(item)
-      } catch (error) {
-        console.warn('[Anime47] search url failed:', url, error)
+          for (const item of [...stateResults, ...htmlResults]) addResult(item)
+          if (merged.length > 0) break // stop after first URL that yields results
+        } catch (error) {
+          console.warn('[Anime47] search url failed:', url, error)
+        }
       }
     }
 
@@ -479,16 +517,56 @@ export class Anime47Provider extends BaseScraper {
     try {
       const detailUrl = this.buildDetailUrl(id)
       const html = await this.fetchHtml(detailUrl, { retries: 2 })
-      const data = this.getDetailData(this.extractInitialState(html))
-      if (!data) return null
+      const $ = cheerio.load(html)
+      
+      // Attempt to extract from JSON-LD schema
+      let schemaData: any = {}
+      $('script[type="application/ld+json"]').each((_, el) => {
+        try {
+          const parsed = JSON.parse($(el).html() || '{}')
+          if (parsed['@type'] === 'TVSeries' || parsed['@type'] === 'Movie' || parsed.name) {
+            schemaData = parsed
+          }
+        } catch (e) {}
+      })
 
-      const canonicalId = this.normalizeAnimeIdFromLink(String(data.canonical_url || detailUrl))
-      const title = String(data.title || '').trim() || id
-      const titles = Array.isArray(data.titles) ? data.titles.map((v: any) => String(v?.title || '')).filter(Boolean) : []
-      const genres = Array.isArray(data.genres) ? data.genres.map((g: any) => String(g?.name || '')).filter(Boolean) : []
-      const rawPoster = String(data.poster || data.images?.poster || '')
-      const rawCover = String(data.cover || '')
+      // Try InitialState fallback just in case
+      const stateData = this.getDetailData(this.extractInitialState(html)) || {}
+
+      const canonicalId = this.normalizeAnimeIdFromLink(String(schemaData.url || stateData.canonical_url || detailUrl))
+      
+      const title = schemaData.name || stateData.title || $('h1, .movie-title, .title').first().text().trim() || id
+      const titles = Array.isArray(stateData.titles) ? stateData.titles.map((v: any) => String(v?.title || '')).filter(Boolean) : []
+      const genres = schemaData.genre || (Array.isArray(stateData.genres) ? stateData.genres.map((g: any) => String(g?.name || '')).filter(Boolean) : [])
+      
+      const rawPoster = String(schemaData.image || stateData.poster || stateData.images?.poster || $('img[src*="/poster/"], .movie-l-img img, .thumbnail img').attr('src') || '')
+      const rawCover = String(stateData.cover || '')
       const cover = rawCover.includes('via.placeholder.com') ? rawPoster : rawCover || rawPoster
+
+      // Extract description from HTML or Schema
+      const description = schemaData.description || stateData.description || $('.text-caption, .text-body2, .description, .movie-dd').first().text().trim()
+
+      // Extract year from Schema datePublished or HTML badges
+      let year = Number(stateData.year || 0)
+      if (!year && schemaData.datePublished) {
+        year = new Date(schemaData.datePublished).getFullYear()
+      }
+      if (!year) {
+        $('.q-chip, .q-badge').each((_, el) => {
+          const t = $(el).text().trim()
+          if (/^20\d{2}$/.test(t)) year = Number(t)
+        })
+      }
+
+      // Extract episodes count
+      let episodeCount = Number(stateData.episodes?.total || schemaData.numberOfEpisodes || 0)
+      if (!episodeCount) {
+        $('.q-chip, .q-badge').each((_, el) => {
+          const t = $(el).text().trim()
+          const m = t.match(/(\d+)\s+Episodes?/i)
+          if (m) episodeCount = Number(m[1])
+        })
+      }
 
       // Extract related anime from HTML
       const relatedAnime: Array<{ id: string; title: string; thumbnail?: string; href?: string }> = []
@@ -535,13 +613,13 @@ export class Anime47Provider extends BaseScraper {
         titleAlt: titles.find((v: string) => v && v !== title),
         thumbnail: this.absolutizeUrl(rawPoster || cover),
         cover: this.absolutizeUrl(cover || rawPoster),
-        description: String(data.description || '').trim() || undefined,
+        description: description,
         genres,
-        status: String(data.status || '').trim() || undefined,
-        year: Number(data.year || 0) || undefined,
-        rating: Number(data.score || data.rating || 0) || undefined,
-        imdbScore: Number(data.malScore || 0) || undefined,
-        episodeCount: Number(data.episodes?.total || 0) || undefined,
+        status: String(stateData.status || '').trim() || undefined,
+        year: year || undefined,
+        rating: Number(stateData.score || stateData.rating || 0) || undefined,
+        imdbScore: Number(stateData.malScore || 0) || undefined,
+        episodeCount: episodeCount || undefined,
         relatedAnime: relatedAnime.length > 0 ? relatedAnime : undefined
       }
 
@@ -562,8 +640,11 @@ export class Anime47Provider extends BaseScraper {
 
   async getEpisodes(animeId: string): Promise<Episode[]> {
     try {
-      // First, try the episodes API endpoint
-      const apiUrl = `${this.apiBase}/anime/${animeId}/episodes?lang=vi`
+      // Extract numeric ID: "chou-kaguya-hime-m10298" → "10298" (API needs plain number)
+      const mMatch = animeId.match(/-m(\d+)$/i) || animeId.match(/^m?(\d+)$/i)
+      const numericId = mMatch ? mMatch[1] : animeId
+      const apiUrl = `${this.apiBase}/anime/${numericId}/episodes?lang=vi`
+      console.log(`[Anime47] getEpisodes: ${animeId} → numericId=${numericId}`)
       try {
         const response = await fetch(apiUrl, { 
           headers: this.jsonHeaders,
@@ -683,67 +764,16 @@ export class Anime47Provider extends BaseScraper {
 
       // Anime47 streams from nonprofit.asia CDN are obfuscated (PNG-wrapped segments).
       // The only reliable playback is via iframe embedding the original watch page.
-      // We still expose the direct HLS as secondary option for advanced users.
-      const servers: VideoServer[] = []
-
-      const addServer = (candidate: VideoServer) => {
-        if (!candidate.embedUrl) return
-        if (servers.some((s) => s.embedUrl === candidate.embedUrl)) return
-        servers.push(candidate)
-      }
-
-      // Primary: iframe watch page (always works)
-      addServer({
-        name: 'Watch Page (HD)',
-        embedUrl: episodeUrl,
-        quality: 'HD',
-        type: 'iframe',
-        source: 'anime47'
-      })
-
-      // Secondary: try to expose raw HLS for users who want to test
-      const html = await this.fetchHtml(episodeUrl, { retries: 1 })
-      const state = this.extractInitialState(html)
-      const htmlWatchData = state?.queryCache?.queries?.[0]?.state?.data as Anime47WatchApiResponse | undefined
-      const apiWatchData = await this.fetchWatchDataByApi(episodeUrl)
-      const watchData = (apiWatchData?.streams?.length ? apiWatchData : htmlWatchData) || htmlWatchData
-
-      if (Array.isArray(watchData?.streams)) {
-        for (const stream of watchData.streams) {
-          const link = this.absolutizeUrl(String(stream?.url || stream?.link || stream?.file || stream?.src || ''))
-          if (!link.startsWith('http')) continue
-          const resolvedType = this.inferStreamTypeFromUrl(link, stream?.player_type)
-          addServer({
-            name: String(stream?.server_name || stream?.label || stream?.name || stream?.quality || 'Direct'),
-            embedUrl: link,
-            quality: String(stream?.quality || 'HD'),
-            type: resolvedType,
-            source: 'anime47'
-          })
+      // As requested, we remove the HLS direct option since iframe is more stable.
+      return [
+        {
+          name: 'Watch Page (Iframe)',
+          embedUrl: episodeUrl,
+          quality: 'HD',
+          type: 'iframe',
+          source: 'anime47'
         }
-      }
-
-      // Fallback regex extraction
-      if (servers.length <= 1) {
-        const links = Array.from(html.matchAll(/https?:\/\/[^"'\\\s]+(?:\.m3u8|\.mp4|\.mpd)[^"'\\\s]*/gi)).map((m) => m[0])
-        for (const link of links) {
-          const lower = link.toLowerCase()
-          addServer({
-            name: lower.includes('.m3u8') ? 'HLS' : lower.includes('.mpd') ? 'DASH' : 'MP4',
-            embedUrl: link,
-            quality: 'HD',
-            type: lower.includes('.m3u8') ? 'hls' : lower.includes('.mpd') ? 'dash' : 'mp4',
-            source: 'anime47'
-          })
-        }
-      }
-
-      const accessCode = String((apiWatchData?.access_mode?.code || htmlWatchData?.access_mode?.code || '')).toLowerCase()
-      if (accessCode && accessCode !== 'public' && servers.length === 1 && servers[0].type === 'iframe') {
-        const accessMessage = apiWatchData?.access_mode?.message || htmlWatchData?.access_mode?.message || 'Nội dung bị giới hạn truy cập'
-        console.warn('[Anime47] non-public access mode:', accessCode, accessMessage)
-      }
-      return servers
+      ]
     } catch (error) {
       console.error('[Anime47] getVideoServers error:', error)
       return []
@@ -756,19 +786,38 @@ export class Anime47Provider extends BaseScraper {
       const lower = url.toLowerCase()
 
       // Anime47 HLS streams are obfuscated (PNG-wrapped segments).
-      // For iframe servers, return immediately - let webview handle playback.
+      // For iframe servers, inject localStorage auth into webview so SPA doesn't show login.
       if (server.type === 'iframe') {
+        const session = loadAuthSession('anime47')
         return {
           url,
           type: 'iframe',
           quality: server.quality || 'HD',
           headers: { Referer: this.baseUrl, Origin: this.baseUrl },
-          provider: 'anime47'
+          provider: 'anime47',
+          localStorageState: session?.localStorageState
         }
       }
 
       const looksLikeAnime47FileManifest = lower.includes('/file/')
       if (lower.includes('.m3u8') || (server.type === 'hls' && looksLikeAnime47FileManifest)) {
+        // Anime47 obfuscated streams (vlogphim) need interception because they run inside JWPlayer
+        // fetchM3U8 won't work on the /file/<token> URL directly
+        if (looksLikeAnime47FileManifest) {
+          const watchPageUrl = server.embedUrl || url
+          const intercepted = await interceptA47StreamUrl(watchPageUrl)
+          if (intercepted) {
+            return {
+              url: intercepted.url,
+              type: intercepted.type,
+              quality: server.quality || 'HD',
+              headers: { Referer: intercepted.referer, Origin: intercepted.referer },
+              provider: 'anime47'
+            }
+          }
+        }
+
+        // Fallback to direct fetch
         const playlist = await fetchM3U8(url, { Referer: this.baseUrl })
         return {
           url: playlist?.defaultUrl || url,

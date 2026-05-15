@@ -120,17 +120,38 @@
         }
         webview.setAttribute('allowpopups', 'false');
         webview.setAttribute('disablewebsecurity', '');
-        
+        let authInjected = false;
+
         webview.addEventListener('dom-ready', () => {
           try {
+            // Step 1: On first load, inject auth localStorage and reload so SPA sees auth
+            if (!authInjected && streamInfo.localStorageState && typeof streamInfo.localStorageState === 'object') {
+              const entries = Object.entries(streamInfo.localStorageState);
+              if (entries.length > 0) {
+                authInjected = true; // Set flag BEFORE reload to prevent infinite loop
+                const injectScript = entries
+                  .map(([k, v]) => `try{localStorage.setItem(${JSON.stringify(k)},${JSON.stringify(v)})}catch(e){}`)
+                  .join(';');
+                webview.executeJavaScript(injectScript)
+                  .then(() => webview.reload())
+                  .catch(() => {});
+                return; // Skip isolation until after reload
+              }
+            }
+
+            // Step 2: After auth is injected (or no auth needed), run UI isolation
             const fs = require('fs');
             const path = require('path');
-            const css = fs.readFileSync(path.join(__dirname, 'isolate.css'), 'utf-8');
-            const js = fs.readFileSync(path.join(__dirname, 'isolate.js'), 'utf-8');
-            webview.insertCSS(css);
-            webview.executeJavaScript(js);
+            try {
+              const css = fs.readFileSync(path.join(__dirname, 'isolate.css'), 'utf-8');
+              const js = fs.readFileSync(path.join(__dirname, 'isolate.js'), 'utf-8');
+              webview.insertCSS(css);
+              webview.executeJavaScript(js);
+            } catch (e) {
+              console.error('Failed to inject isolation script:', e);
+            }
           } catch (e) {
-            console.error('Failed to inject isolation script:', e);
+            console.error('dom-ready handler error:', e);
           }
         });
 
