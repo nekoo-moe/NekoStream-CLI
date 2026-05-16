@@ -434,7 +434,16 @@ async function fetchAvsPage(
       return null
     }
 
-    const html = await page.content()
+    let html = ''
+    for (let i = 0; i < 3; i++) {
+      try {
+        html = await page.content()
+        break
+      } catch (e: any) {
+        if (e.message?.includes('navigating')) await page.waitForTimeout(1000)
+        else throw e
+      }
+    }
     const itemCount = (html.match(/class="[^"]*TPostMv[^"]*"/gi) || []).length
     console.log(`[AVS] HTML length: ${html.length}, TPostMv items found: ${itemCount}`)
     return { html, finalUrl }
@@ -547,7 +556,16 @@ export async function fetchA47Page(url: string): Promise<string | null> {
       { timeout: 10000, polling: 300 }
     ).catch(() => {})
 
-    const html = await page.content()
+    let html = ''
+    for (let i = 0; i < 3; i++) {
+      try {
+        html = await page.content()
+        break
+      } catch (e: any) {
+        if (e.message?.includes('navigating')) await page.waitForTimeout(1000)
+        else throw e
+      }
+    }
     console.log(`[A47] ✅ HTML length: ${html.length}`)
     return html
   } catch (err) {
