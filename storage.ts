@@ -3,7 +3,8 @@ import path from 'path'
 import crypto from 'crypto'
 import os from 'os'
 
-const DATA_DIR = path.join(__dirname, '.data')
+const OLD_DATA_DIR = path.join(__dirname, '.data')
+const DATA_DIR = path.join(os.homedir(), '.nekostream-cli')
 const HISTORY_FILE = path.join(DATA_DIR, 'history.json')
 const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json')
 const AUTH_SESSIONS_FILE = path.join(DATA_DIR, 'auth-sessions.json')
@@ -11,6 +12,12 @@ const AUTH_SESSIONS_FILE = path.join(DATA_DIR, 'auth-sessions.json')
 // Ensure directory exists
 if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true })
+  // Migrate data from old directory if it exists
+  if (fs.existsSync(OLD_DATA_DIR)) {
+    try {
+      fs.cpSync(OLD_DATA_DIR, DATA_DIR, { recursive: true })
+    } catch (e) {}
+  }
 }
 
 export interface HistoryEntry {
@@ -28,6 +35,7 @@ export interface Settings {
   autoPlayNext: boolean
   developerMode?: boolean
   providerDomains?: Record<string, string>
+  discordRpcEnabled?: boolean
 }
 
 const DEFAULT_SETTINGS: Settings = {
@@ -35,7 +43,8 @@ const DEFAULT_SETTINGS: Settings = {
   defaultQuality: '1080p',
   autoPlayNext: false,
   developerMode: false,
-  providerDomains: {}
+  providerDomains: {},
+  discordRpcEnabled: true
 }
 
 // ── Settings ─────────────────────────────────────────────────────────────────
@@ -59,7 +68,7 @@ export function saveSettings(settings: Partial<Settings>) {
 }
 
 const PROVIDER_DEFAULT_DOMAINS: Record<string, string> = {
-  animevietsub: 'https://animevietsub.bz',
+  animevietsub: 'https://animevietsub.site',
   anime47: 'https://anime47.best',
   animehay: 'https://animehay.ink'
 }

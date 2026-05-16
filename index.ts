@@ -8,6 +8,7 @@ import { providers, getProvider } from './providers'
 import { launchPlayer } from './player'
 import { clearScreen, printBanner, drawAnimeCard } from './ui'
 import { loadSettings, saveSettings, loadHistory, saveHistoryEntry, clearHistory } from './storage'
+import { initDiscord, toggleDiscordPresence, setBrowsingPresence, setWatchingPresence, clearDiscordPresence } from './discord'
 import type { AnimeDetail, AnimeSearchResult } from './scrapers/base'
 import {
   getAuthStatus,
@@ -26,6 +27,7 @@ async function sleep(ms: number) {
 }
 
 async function showSettingsMenu() {
+  setBrowsingPresence('Đang cài đặt Client', undefined, 'Cài đặt')
   while (true) {
     clearScreen()
     printBanner('Settings', 'Configure your default preferences')
@@ -41,6 +43,7 @@ async function showSettingsMenu() {
         { title: `Default Provider: ${chalk.green(settings.defaultProvider)}`, value: 'provider' },
         { title: `Default Quality: ${chalk.green(settings.defaultQuality)}`, value: 'quality' },
         { title: `Auto-Play Next: ${settings.autoPlayNext ? chalk.green('ON') : chalk.red('OFF')}`, value: 'autoplay' },
+        { title: `Discord RPC: ${settings.discordRpcEnabled ? chalk.green('ON') : chalk.red('OFF')}`, value: 'discord' },
         { title: `Developer Mode (Preserve Logs): ${settings.developerMode ? chalk.green('ON') : chalk.red('OFF')}`, value: 'devmode' },
         { title: `Configure Domains`, value: 'domains' },
         { separator: 'TRỞ VỀ' },
@@ -72,6 +75,12 @@ async function showSettingsMenu() {
 
     if (action === 'autoplay') {
       saveSettings({ autoPlayNext: !settings.autoPlayNext })
+    }
+
+    if (action === 'discord') {
+      const nextVal = !settings.discordRpcEnabled
+      saveSettings({ discordRpcEnabled: nextVal })
+      toggleDiscordPresence(nextVal)
     }
 
     if (action === 'devmode') {
@@ -137,6 +146,7 @@ async function showSettingsMenu() {
 }
 
 async function showHistoryMenu() {
+  setBrowsingPresence('Đang xem Lịch Sử', undefined, 'Lịch sử Toàn cục')
   while (true) {
     clearScreen()
     printBanner('Continue Watching', 'Resume from where you left off')
@@ -190,6 +200,7 @@ async function showHistoryMenu() {
 }
 
 async function showAnimeList(providerName: string, title: string, list: AnimeSearchResult[]) {
+  setBrowsingPresence(`Danh sách: ${title}`, providerName, title)
   while (true) {
     clearScreen()
     printBanner(`Provider: ${providerName.toUpperCase()}`, title.toUpperCase())
@@ -223,6 +234,7 @@ async function showAnimeList(providerName: string, title: string, list: AnimeSea
 }
 
 async function openAnimeMenu(providerName: string, animeId: string) {
+  setBrowsingPresence(`Đang tải dữ liệu: ${animeId}...`, providerName, 'Tải dữ liệu')
   const provider = getProvider(providerName)
 
   // Fetch details & episodes
@@ -266,6 +278,7 @@ async function openAnimeMenu(providerName: string, animeId: string) {
   }
 
   while (true) {
+    setBrowsingPresence(`Đang xem thông tin: ${selectedAnime ? selectedAnime.title : animeId}`, providerName, 'Thông tin Phim')
     clearScreen()
     printBanner(`Provider: ${providerName.toUpperCase()}`, selectedAnime ? selectedAnime.title : animeId)
     if (selectedAnime) drawAnimeCard(selectedAnime)
@@ -360,7 +373,9 @@ async function openAnimeMenu(providerName: string, animeId: string) {
       })
 
       try {
+        setWatchingPresence(selectedAnime.title, episode.title || `Episode ${episode.number}`, providerName)
         await launchPlayer(streamInfo)
+        setBrowsingPresence(`Đang xem thông tin: ${selectedAnime.title}`, providerName, 'Thông tin Phim')
         console.log(chalk.green('\nPlayer closed.'))
         await sleep(500)
       } catch (e) {
@@ -375,6 +390,7 @@ async function openAnimeMenu(providerName: string, animeId: string) {
 
 /** Display a paginated interactive list of UserDataItems — user can select to watch */
 async function showUserDataList(title: string, items: UserDataItem[], providerName: string): Promise<void> {
+  setBrowsingPresence(`Đang xem ${title}`, providerName, title)
   if (items.length === 0) {
     console.log(chalk.yellow('\n  (Danh sách trống)'))
     await sleep(1500)
@@ -424,6 +440,7 @@ async function showProviderAccountMenu(provider: 'animevietsub' | 'anime47'): Pr
   const label = provider === 'animevietsub' ? 'AnimeVietsub' : 'Anime47'
 
   while (true) {
+    setBrowsingPresence('Quản lý Tài khoản', provider, 'Tài khoản')
     clearScreen()
     const status = getAuthStatus(provider)
     const loginLabel = status.loggedIn
@@ -604,11 +621,13 @@ async function checkUpdate() {
 
 async function main() {
   await checkUpdate()
+  await initDiscord()
 
   let settings = loadSettings()
   let currentProviderName = settings.defaultProvider
 
   while (true) {
+    setBrowsingPresence('Đang lướt Menu Chính')
     clearScreen()
 
     const authStatus = await getAuthStatus(currentProviderName as any)
@@ -674,6 +693,7 @@ async function main() {
 
     if (!action || action === 'exit') {
       clearScreen()
+      clearDiscordPresence()
       console.log(chalk.magenta('\nThanks for using NekoStream CLI! 🎬\n'))
       process.exit(0)
     }
@@ -765,6 +785,7 @@ async function main() {
           await sleep(2000)
           continue
         }
+        setBrowsingPresence(`Đang Tìm kiếm: ${keyword}`, currentProviderName, 'Tìm kiếm')
         await showAnimeList(currentProviderName, `Search Results: ${keyword}`, results)
       } catch (e) {
         searchSpinner.stop()
@@ -783,6 +804,7 @@ async function main() {
           await sleep(2000)
           continue
         }
+        setBrowsingPresence(`Đang Xem ${action === 'trending' ? 'Xu hướng' : 'Cập nhật gần đây'}`, currentProviderName, action === 'trending' ? 'Xu hướng' : 'Mới cập nhật')
         await showAnimeList(currentProviderName, action === 'trending' ? '🔥 Trending Now' : '🆕 Recently Added', results)
       } catch (e) {
         spinner.stop()
@@ -821,6 +843,7 @@ async function main() {
 // Global hook to catch Ctrl+C gracefully
 process.on('SIGINT', () => {
   clearScreen()
+  clearDiscordPresence()
   console.log(chalk.magenta('\nThanks for using NekoStream CLI! 🎬\n'))
   process.exit(0)
 })
