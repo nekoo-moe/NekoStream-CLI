@@ -105,9 +105,7 @@ async function getAdblocker() {
     const { PlaywrightBlocker } = await import('@ghostery/adblocker-playwright')
     const { fetch } = await import('cross-fetch')
     _adblocker = await PlaywrightBlocker.fromPrebuiltAdsAndTracking(fetch)
-    console.log('[AdBlock] Ghostery adblocker loaded with EasyList/uBlock filter lists')
   } catch {
-    console.log('[AdBlock] Could not load Ghostery adblocker, falling back to basic blocking')
     _adblocker = null
   }
   return _adblocker
@@ -247,15 +245,17 @@ export async function loginAnimeVietsubInteractive(): Promise<ProviderAuthStatus
     Object.defineProperty(navigator, 'webdriver', { get: () => undefined })
     ;(globalThis as any).chrome = { runtime: {} }
   })
-  await applyAdBlocking(context)
+  // Skip adblocking for AnimeVietsub login as requested by the user ("không cần adblock cho provider này")
+  // await applyAdBlocking(context)
 
   const page = await context.newPage()
-  await applyAdBlockingToPage(page)
+  // await applyAdBlockingToPage(page)
 
   try {
     await page.goto(AVS_LOGIN_URL, { waitUntil: 'domcontentloaded', timeout: 30000 })
 
-    // Force inject CSS bypassing CSP to ensure ads are hidden even if they use inline blocks
+    // Force inject CSS bypassed for AnimeVietsub to avoid triggering adblocker detection
+    /*
     await page.addStyleTag({
       content: `
         a[href*="win88"], a[href*="yo88"], a[href*="i9bet"],
@@ -278,6 +278,7 @@ export async function loginAnimeVietsubInteractive(): Promise<ProviderAuthStatus
         }
       `
     }).catch(() => {})
+    */
 
     // Wait for successful login (redirect away from login page)
     await page.waitForFunction(
@@ -352,27 +353,116 @@ function toAbsoluteAvsUrl(raw: string): string {
   return `${base}/${raw}`
 }
 
+/**
+ * Parse AnimeVietsub anime list from HTML using Cheerio.
+ * Handles both standard listing cards (TPostMv) and history cards
+ * which include episode number in the "Xem tiếp Tập XX" button.
+ */
 function parseAvsAnimeList(html: string): UserDataItem[] {
+  // Lazy-load cheerio only when needed (it's already a dep in animevietsub.ts)
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const cheerio = require('cheerio') as typeof import('cheerio')
+  const $ = cheerio.load(html)
   const items: UserDataItem[] = []
-  // Split by TPostMv items
-  const parts = html.split(/<li[^>]*class="[^"]*TPostMv[^"]*"[^>]*>/i)
-  for (let i = 1; i < parts.length; i++) {
-    const block = parts[i]
-    const linkMatch = block.match(/href="((?:https?:\/\/animevietsub\.[a-z]+)?\/phim\/([^/"?#]+)\/?)"[^>]*>/i)
-    if (!linkMatch) continue
-    const animeId = linkMatch[2].replace(/\/$/, '')
-    if (!animeId) continue
-    const url = toAbsoluteAvsUrl(linkMatch[1])
-    const titleMatch = block.match(/<h2[^>]*class="[^"]*Title[^"]*"[^>]*>([^<]+)<\/h2>/i) ||
-                       block.match(/<h2[^>]*>([^<]+)<\/h2>/i)
-    const title = titleMatch ? titleMatch[1].trim() : animeId.replace(/-a\d+$/, '').replace(/-/g, ' ')
-    const imgMatch = block.match(/<img[^>]*src="([^"]+)"/i)
-    const thumbnail = imgMatch ? toAbsoluteAvsUrl(imgMatch[1]) : undefined
-    if (!items.some(x => x.animeId === animeId)) {
-      items.push({ animeId, title, thumbnail, url })
+  const seen = new Set<string>()
+
+  // ── Strategy 1: Standard grid cards (TPostMv) ─────────────────────────────
+  // Used on: /tu-phim, /theo-doi/, search results, etc.
+  $('li.TPostMv, article.TPostMv, .TPost.TPostMv').each((_, el) => {
+    const $el = $(el)
+    const $link = $el.find('a[href*="/phim/"]').first()
+    const href = $link.attr('href') || ''
+    if (!href.includes('/phim/')) return
+
+    const animeId = extractAvsAnimeId(href)
+    if (!animeId || seen.has(animeId)) return
+    seen.add(animeId)
+
+    const url = toAbsoluteAvsUrl(href)
+    const title = (
+      $el.find('h2.Title, h2, h3').first().text().trim() ||
+      $link.attr('title') ||
+      $el.find('img').first().attr('alt') ||
+      animeId.replace(/-a\d+$/, '').replace(/-/g, ' ')
+    )
+    const thumbnail = toAbsoluteAvsUrl(
+      $el.find('img').first().attr('data-src') ||
+      $el.find('img').first().attr('src') || ''
+    ) || undefined
+
+    // Episode badge (e.g. "Tập 01", "Tập Full")
+    const badge = $el.find('.mli-eps, .mli-quality, .ribbon, .episode').first().text().trim()
+    const epMatch = badge.match(/(\d+)/)
+    const episodeNumber = epMatch ? parseInt(epMatch[1], 10) : undefined
+
+    items.push({ animeId, title, thumbnail, url, episodeNumber, status: badge || undefined })
+  })
+
+  if (items.length > 0) return items
+
+  // ── Strategy 2: History cards ──────────────────────────────────────────────
+  // /lich-su/ has a different layout:
+  //   sections "Hôm nay" / "Tuần này" / "Cũ hơn"
+  //   each card has a thumbnail, title, timestamp, and "Xem tiếp Tập XX" button
+  // We look for any anchor to /phim/ and collect the card context around it.
+  const processedHrefs = new Set<string>()
+  $('a[href*="/phim/"]').each((_, el) => {
+    const href = $(el).attr('href') || ''
+    // Skip watch-page links (/tap-, /xem-phim)
+    if (href.includes('/tap-') || href.includes('/xem-phim') || href.includes('#')) return
+    if (processedHrefs.has(href)) return
+    processedHrefs.add(href)
+
+    const animeId = extractAvsAnimeId(href)
+    if (!animeId || seen.has(animeId)) return
+    seen.add(animeId)
+
+    // Walk up to find the card container
+    const $card = $(el).closest('li, article, .item, div[class*="item"], div[class*="card"]').first()
+    const $root = $card.length ? $card : $(el)
+
+    const url = toAbsoluteAvsUrl(href)
+    const title = (
+      $root.find('h2, h3, .Title, .title, .name').first().text().trim() ||
+      $(el).attr('title') ||
+      $root.find('img').first().attr('alt') ||
+      animeId.replace(/-a\d+$/, '').replace(/-/g, ' ')
+    )
+    const thumbnail = toAbsoluteAvsUrl(
+      $root.find('img').first().attr('data-src') ||
+      $root.find('img').first().attr('src') || ''
+    ) || undefined
+
+    // Extract progress episode number from "Xem tiếp Tập XX" button
+    const continueText = $root.find('a[href*="/tap-"], button, .btn').text()
+    const epMatch = continueText.match(/[Tt]ập\s*(\d+|Full)/)
+    let episodeNumber: number | undefined
+    if (epMatch && epMatch[1] !== 'Full') {
+      episodeNumber = parseInt(epMatch[1], 10)
     }
-  }
+
+    // Extract latest episode badge for status (e.g. "Tập 13/13", "Tập 13")
+    const badge = $root.find('.mli-eps, .mli-quality, .ribbon, .episode').first().text().trim()
+    const status = badge || (epMatch ? `Tập ${epMatch[1]}` : undefined)
+
+    // Extract watch-continue href for the episode link
+    const continueHref = $root.find('a[href*="/tap-"]').first().attr('href')
+    const episodeUrl = continueHref ? toAbsoluteAvsUrl(continueHref) : url
+
+    if (title) {
+      items.push({ animeId, title, thumbnail, url: episodeUrl, episodeNumber, status })
+    }
+  })
+
   return items
+}
+
+/** Extract anime slug ID from a /phim/SLUG/ href */
+function extractAvsAnimeId(href: string): string | null {
+  const m = href.match(/\/phim\/([^/?#]+)/)
+  if (!m) return null
+  // Strip trailing slash artifacts
+  return m[1].replace(/\/$/, '') || null
 }
 
 function parseAvsPagination(html: string): { currentPage: number; totalPages: number } {
@@ -424,13 +514,11 @@ async function fetchAvsPage(
     // Block images/media to speed up (we only need HTML)
     await context.route('**/*.{png,jpg,jpeg,gif,webp,svg,ico,woff,woff2,ttf,mp4,webm,mp3}', r => r.abort())
 
-    console.log(`[AVS] Fetching (Playwright): ${url}`)
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 })
     const finalUrl = page.url()
-    console.log(`[AVS] → final: ${finalUrl}`)
 
     if (/dang-nhap|\/login/i.test(finalUrl)) {
-      console.log('[AVS] ⚠ Redirected to login — cookie invalid/expired')
+      console.warn('[AVS] Redirected to login — cookie invalid/expired. Please re-login.')
       return null
     }
 
@@ -444,11 +532,9 @@ async function fetchAvsPage(
         else throw e
       }
     }
-    const itemCount = (html.match(/class="[^"]*TPostMv[^"]*"/gi) || []).length
-    console.log(`[AVS] HTML length: ${html.length}, TPostMv items found: ${itemCount}`)
     return { html, finalUrl }
   } catch (err) {
-    console.log(`[AVS] fetch error: ${err}`)
+    console.error(`[AVS] Page fetch error for ${url}:`, err)
     return null
   } finally {
     await browser?.close().catch(() => {})
@@ -471,10 +557,7 @@ export async function fetchA47Page(url: string): Promise<string | null> {
   const token = session?.accessToken ?? null
   const lsSnapshot = session?.localStorageState ?? null
 
-  if (!token && !lsSnapshot) {
-    console.log('[A47] No auth data found, cannot fetch authenticated page')
-    return null
-  }
+  if (!token && !lsSnapshot) return null
 
   const A47_ORIGIN = getProviderBaseUrl('anime47') || 'https://anime47.best'
   const { chromium } = await import('playwright')
@@ -493,7 +576,6 @@ export async function fetchA47Page(url: string): Promise<string | null> {
 
     // Step 1: Prime the origin by navigating to homepage first
     // This is required so localStorage.setItem works (same-origin policy)
-    console.log(`[A47] Priming origin: ${A47_ORIGIN}`)
     await page.goto(A47_ORIGIN, { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {})
 
     // Step 2: Restore full localStorage snapshot from login session
@@ -505,7 +587,6 @@ export async function fetchA47Page(url: string): Promise<string | null> {
           })
         } catch {}
       }, lsSnapshot)
-      console.log(`[A47] Restored ${Object.keys(lsSnapshot).length} localStorage entries`)
     } else if (token) {
       // Fallback: inject only the token under common key names
       await page.evaluate((jwt) => {
@@ -513,12 +594,10 @@ export async function fetchA47Page(url: string): Promise<string | null> {
           try { localStorage.setItem(k, jwt) } catch {}
         })
       }, token)
-      console.log(`[A47] Injected JWT token into localStorage`)
     }
 
     // Special handling for API endpoints to bypass Cloudflare while sending headers
     if (url.includes('/api/')) {
-      console.log(`[A47] Fetching API (Playwright Evaluate): ${url}`)
       // Navigate to origin first to bypass Cloudflare check
       await page.goto(A47_ORIGIN, { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {})
       const apiResponse = await page.evaluate(async ({ apiUrl, jwt }) => {
@@ -539,14 +618,11 @@ export async function fetchA47Page(url: string): Promise<string | null> {
     }
 
     // Step 3: Navigate to the target URL with restored auth
-    console.log(`[A47] Fetching (Playwright): ${url}`)
-    await page.goto(url, { waitUntil: 'networkidle', timeout: 30000 }).catch(e => {
-      console.log(`[A47] ⚠ page.goto timeout/error, continuing to extract content: ${e.message}`)
-    })
+    await page.goto(url, { waitUntil: 'networkidle', timeout: 30000 }).catch(() => {})
     const finalUrl = page.url()
 
     if (/\/auth\/login|\/login(?!\/)/i.test(finalUrl)) {
-      console.log(`[A47] ⚠ Redirected to login (${finalUrl}) — session expired, please re-login`)
+      console.warn(`[A47] Redirected to login — session expired, please re-login`)
       return null
     }
 
@@ -566,10 +642,9 @@ export async function fetchA47Page(url: string): Promise<string | null> {
         else throw e
       }
     }
-    console.log(`[A47] ✅ HTML length: ${html.length}`)
     return html
   } catch (err) {
-    console.log(`[A47] Playwright fetch error: ${err}`)
+    console.error(`[A47] Page fetch error:`, err)
     return null
   } finally {
     await browser?.close().catch(() => {})
@@ -626,19 +701,15 @@ export async function interceptA47StreamUrl(watchPageUrl: string): Promise<{
       if (lower.includes('.m3u8')) {
         capturedStreamUrl = url
         capturedType = 'hls'
-        console.log(`[A47] 🎯 Intercepted M3U8: ${url}`)
       } else if (lower.includes('/playlist/') || lower.includes('/hls/') || lower.includes('/stream/')) {
         capturedStreamUrl = url
         capturedType = 'hls'
-        console.log(`[A47] 🎯 Intercepted HLS stream: ${url}`)
       } else if (lower.includes('.mp4') && !lower.includes('thumbnail') && !lower.includes('poster')) {
         capturedStreamUrl = url
         capturedType = 'mp4'
-        console.log(`[A47] 🎯 Intercepted MP4: ${url}`)
       } else if (lower.includes('.mpd')) {
         capturedStreamUrl = url
         capturedType = 'dash'
-        console.log(`[A47] 🎯 Intercepted DASH: ${url}`)
       }
     })
 
@@ -660,7 +731,6 @@ export async function interceptA47StreamUrl(watchPageUrl: string): Promise<{
       }, token)
     }
 
-    console.log(`[A47] Intercepting streams from: ${watchPageUrl}`)
     await page.goto(watchPageUrl, { waitUntil: 'networkidle', timeout: 30000 })
 
     // Wait up to 12s for JWPlayer to initialize and make its first stream request
@@ -688,7 +758,6 @@ export async function interceptA47StreamUrl(watchPageUrl: string): Promise<{
         if (capturedStreamUrl) {
           const lower = capturedStreamUrl.toLowerCase()
           capturedType = lower.includes('.mp4') ? 'mp4' : lower.includes('.mpd') ? 'dash' : 'hls'
-          console.log(`[A47] 🎯 JWPlayer API: ${capturedStreamUrl}`)
         }
       }
     }
@@ -697,10 +766,10 @@ export async function interceptA47StreamUrl(watchPageUrl: string): Promise<{
       return { url: capturedStreamUrl, type: capturedType, referer: A47_ORIGIN }
     }
 
-    console.log(`[A47] ⚠ Could not intercept stream URL from ${watchPageUrl}`)
+    console.warn(`[A47] Could not intercept stream URL from ${watchPageUrl}`)
     return null
   } catch (err) {
-    console.log(`[A47] Stream interception error: ${err}`)
+    console.error(`[A47] Stream interception error:`, err)
     return null
   } finally {
     await browser?.close().catch(() => {})
@@ -712,23 +781,33 @@ export async function fetchAnimeVietsubList(listType: 'favorites' | 'history' | 
   if (!session) return { success: false, authenticated: false, items: [], error: 'Chưa đăng nhập AnimeVietsub' }
 
   const base = getProviderBaseUrl('animevietsub')
+  // Ensure we always try the canonical .site domain as well
   const altBase = base.replace(/animevietsub\.[a-z]+$/i, 'animevietsub.site')
   const bases = base === altBase ? [base] : [base, altBase]
 
-  const pathMap: Record<string, string> = {
-    favorites: '/tu-phim',
-    history: '/lich-su/',
-    following: '/theo-doi/'
+  // Each list type maps to one or more URL paths to try in order.
+  // The history page (/lich-su/) groups entries into Hôm nay / Tuần này / Cũ hơn.
+  // Favorites (/tu-phim) shows MỚI UPDATE (default) or MỚI THÊM (?sort=added).
+  const pathMap: Record<string, string[]> = {
+    favorites: ['/tu-phim'],
+    history:   ['/lich-su/'],
+    following: ['/theo-doi/']
   }
-  const listPath = pathMap[listType]
+  const paths = pathMap[listType] || []
 
   for (const b of bases) {
-    const url = page > 1 ? `${b}${listPath.replace(/\/$/, '')}/trang-${page}.html` : `${b}${listPath}`
-    const result = await fetchAvsPage(url, session.cookies)
-    if (!result) continue
-    const items = parseAvsAnimeList(result.html)
-    const pagination = parseAvsPagination(result.html)
-    return { success: true, authenticated: true, items, totalPages: pagination.totalPages, currentPage: pagination.currentPage }
+    for (const listPath of paths) {
+      const url = page > 1
+        ? `${b}${listPath.replace(/\/$/, '')}/trang-${page}.html`
+        : `${b}${listPath}`
+      const result = await fetchAvsPage(url, session.cookies)
+      if (!result) continue
+      const items = parseAvsAnimeList(result.html)
+      const pagination = parseAvsPagination(result.html)
+      if (items.length > 0 || page === 1) {
+        return { success: true, authenticated: true, items, totalPages: pagination.totalPages, currentPage: pagination.currentPage }
+      }
+    }
   }
   return { success: false, authenticated: true, items: [], error: `Không tìm thấy trang ${listType}` }
 }
@@ -758,10 +837,11 @@ export async function fetchAnimeVietsubNotifications(page = 1): Promise<UserData
   const altBase = base.replace(/animevietsub\.[a-z]+$/i, 'animevietsub.site')
   const bases = base === altBase ? [base] : [base, altBase]
 
+  // AVS uses /account/info/?tab=thongbao for notifications tab
   for (const b of bases) {
     const url = page > 1
-      ? `${b}/tai-khoan/thong-bao/trang-${page}.html`
-      : `${b}/tai-khoan/thong-bao/`
+      ? `${b}/account/info/?tab=thongbao&page=${page}`
+      : `${b}/account/info/?tab=thongbao`
     const result = await fetchAvsPage(url, session.cookies)
     if (!result) continue
     const items = parseAvsAnimeList(result.html)
@@ -781,8 +861,7 @@ export async function loginAnime47Interactive(): Promise<ProviderAuthStatus> {
   const A47_BASE = getProviderBaseUrl('anime47')
   const A47_API = A47_BASE.replace(/\.[a-z]+$/, '.love') + '/api'
 
-  console.log(`\n[Auth] Opening browser for Anime47 login...`)
-  console.log(`[Auth] URL: ${A47_BASE}/auth/login`)
+  console.log(`\n[Auth] Mở trình duyệt để đăng nhập Anime47...`)
   console.log('[Auth] Vui lòng đăng nhập trong cửa sổ trình duyệt. Cửa sổ sẽ tự đóng sau khi đăng nhập thành công.\n')
 
   const browser = await launchHeadfulBrowser()

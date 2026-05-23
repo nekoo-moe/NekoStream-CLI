@@ -109,7 +109,7 @@ function wrapText(text: string, maxWidth: number): string[] {
 export function drawAnimeCard(anime: AnimeDetail) {
   const width = 76
   const pad = (str: string, len: number) => {
-    const visibleLength = str.replace(/\x1B\[\d+m/g, '').length
+    const visibleLength = str.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, '').length
     if (visibleLength >= len) return str
     return str + ' '.repeat(len - visibleLength)
   }

@@ -149,7 +149,6 @@ export class AnimeVietsubProvider extends BaseScraper {
     try { hostname = new URL(url).hostname } catch { /* ignore */ }
     if (hostname && AnimeVietsubProvider.blockedHostCache.has(hostname)) {
       if (!useBrowserFallback) throw new Error(`Lỗi kết nối: host bị chặn (${hostname})`)
-      console.log(`[Scraper] Host "${hostname}" is in blocked cache — going Playwright-first for ${url}`)
       return await this.fetchHtmlWithPlaywright(url)
     }
 
@@ -290,10 +289,9 @@ export class AnimeVietsubProvider extends BaseScraper {
         }))
       if (playwrightCookies.length > 0) {
         const cfCookie = playwrightCookies.find(c => c.name === 'cf_clearance')
-        console.log(`[Scraper] Injecting ${playwrightCookies.length} cookies into Playwright (cf_clearance: ${cfCookie ? '✅' : '❌ missing'})`)
+        if (!cfCookie) console.warn('[Scraper] cf_clearance cookie missing — CF challenge may not resolve')
       } else {
-        console.warn('[Scraper] No Electron session cookies found — CF challenge may not resolve')
-        console.warn('[Scraper] Tip: visit  in the app browser to set cf_clearance')
+        console.warn('[Scraper] No Electron session cookies — CF challenge may not resolve. Visit the site in the app browser first.')
       }
     } catch (err) {
       console.warn('[Scraper] Could not read Electron session cookies:', err)
@@ -345,7 +343,6 @@ export class AnimeVietsubProvider extends BaseScraper {
 
     const page = await context.newPage()
     try {
-      console.log(`[Scraper] Playwright navigating to: ${url}`)
       await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 35000 })
 
       // Wait for CF challenge to pass (if cookies didn't help, it may still loop)
@@ -366,12 +363,9 @@ export class AnimeVietsubProvider extends BaseScraper {
       }
 
       // Wait for SPA card content to render via AJAX
-      console.log('[Scraper] Waiting for /phim/ links to appear (SPA AJAX content)...')
       try {
         await page.waitForSelector('a[href*="/phim/"]', { timeout: 12000 })
-        console.log('[Scraper] ✅ /phim/ links appeared in DOM')
       } catch {
-        console.warn('[Scraper] ⚠️ /phim/ links did not appear — capturing anyway')
         // Scroll to trigger lazy content
         await page.evaluate(() => (globalThis as any).scrollTo(0, (globalThis as any).document.body.scrollHeight / 2))
         await page.waitForTimeout(2000)
@@ -384,12 +378,10 @@ export class AnimeVietsubProvider extends BaseScraper {
       if (!html || html.length < 100) {
         throw new Error('Playwright trả về nội dung trống')
       }
-      console.log(`[Scraper] Playwright fallback succeeded, HTML length: ${html.length}`)
 
       // Detect origin-server down page (e.g. "Lỗi Server 5xx" custom page).
       if (isOriginServerDownPage(html)) {
         const hostname = (() => { try { return new URL(url).hostname } catch { return url } })()
-        console.warn(`[Scraper] Origin server down page detected for ${hostname}`)
         throw new SiteDownError(this.name)
       }
 
@@ -452,7 +444,6 @@ export class AnimeVietsubProvider extends BaseScraper {
             $(el).find('a[href*="/phim/"]').length > 0
           )
           if (hasPhimLink) {
-            console.log(`[Scraper] selectCardElements: using selector "${sel}" (${matched.length} elements)`)
             return matched
           }
         }
@@ -699,10 +690,7 @@ export class AnimeVietsubProvider extends BaseScraper {
   }
 
   async search(query: string): Promise<AnimeSearchResult[]> {
-    console.log('[Scraper] search() called with query:', query)
-
     if (!query || query.trim().length === 0) {
-      console.log('[Scraper] Empty query, returning empty results')
       return []
     }
 
@@ -714,13 +702,10 @@ export class AnimeVietsubProvider extends BaseScraper {
 
     for (const searchUrl of searchUrls) {
       try {
-        console.log('[Scraper] Fetching URL:', searchUrl)
         // useBrowserFallback: true → 403 after retries auto-escalates to Playwright
         const html = await this.fetchHtml(searchUrl, { retries: 2, useBrowserFallback: true })
-        console.log('[Scraper] HTML length:', html.length)
 
         if (html.length < 100) {
-          console.warn('[Scraper] Search response too short, trying next URL')
           continue
         }
 
@@ -735,14 +720,10 @@ export class AnimeVietsubProvider extends BaseScraper {
           results.push(card)
         })
 
-        console.log('[Scraper] Parsed results count:', results.length)
-
         if (results.length > 0) {
           return results.slice(0, 24)
         }
 
-        // 0 results from this URL — log and try next
-        console.log('[Scraper] No results from', searchUrl, '— trying next search URL pattern')
       } catch (error) {
         // Site down — re-throw immediately, don't try other URLs
         if (error instanceof SiteDownError) throw error
@@ -750,8 +731,6 @@ export class AnimeVietsubProvider extends BaseScraper {
       }
     }
 
-    // All URL patterns exhausted — return empty with log
-    console.log('[Scraper] All search URL patterns returned 0 results')
     return []
   }
 
@@ -801,7 +780,14 @@ export class AnimeVietsubProvider extends BaseScraper {
       cover = this.absolutizeUrl(cover)
 
       // Extract descriptions (VI/EN)
-      const descriptionVi = $('.Description, .desc, .summary, [itemprop="description"]').first().text().trim() || undefined
+      let descriptionVi = $('.Description, .desc, .summary, [itemprop="description"]').first().text().trim() || undefined
+      const metaDesc = $('meta[name="description"]').attr('content') || $('meta[property="og:description"]').attr('content') || ''
+      if (metaDesc && (!descriptionVi || descriptionVi.endsWith('...') || descriptionVi.endsWith('....') || descriptionVi.length < metaDesc.length)) {
+        if (metaDesc.includes(' ') && metaDesc.length > (descriptionVi?.length || 0)) {
+          descriptionVi = metaDesc.trim()
+        }
+      }
+
       let descriptionEn =
         $('.DescriptionEn, .description-en, .summary-en, [class*="english"]').first().text().trim() ||
         undefined
@@ -952,17 +938,9 @@ export class AnimeVietsubProvider extends BaseScraper {
       let enhancedBanner: string | undefined = undefined
       try {
         const anilistMeta = await externalApi.getEnhancedMetadata(title, titleAlt)
-        if (anilistMeta?.cover) {
-          enhancedCover = anilistMeta.cover
-          console.log(`✅ Got enhanced cover from AniList:`, anilistMeta.cover.substring(0, 60) + '...')
-        }
-        if (anilistMeta?.banner) {
-          enhancedBanner = anilistMeta.banner
-          console.log(`✅ Got banner from AniList:`, anilistMeta.banner.substring(0, 60) + '...')
-        }
-      } catch (e) {
-        console.log('⚠️ Could not fetch AniList metadata, using local cover')
-      }
+        if (anilistMeta?.cover) enhancedCover = anilistMeta.cover
+        if (anilistMeta?.banner) enhancedBanner = anilistMeta.banner
+      } catch { /* non-fatal */ }
 
       const imdbText = $('.InfoList, .Info, .MovieInfo').text()
       const imdbScore = this.parseImdbScore(imdbText)
@@ -1120,7 +1098,6 @@ export class AnimeVietsubProvider extends BaseScraper {
             })
           }
           if (servers.length > 0) {
-            console.log(`📺 Found ${servers.length} servers via ajax/player:`, servers.map(s => s.name).join(', '))
             return servers
           }
         }
@@ -1144,7 +1121,6 @@ export class AnimeVietsubProvider extends BaseScraper {
       if (playerDataMatch) {
         try {
           const playerData = JSON.parse(playerDataMatch[1])
-          console.log('📺 PLAYER_DATA:', JSON.stringify(playerData).substring(0, 200))
           
           if (playerData.link) {
             // This is typically the DU server (storage.googleapiscdn.com)
@@ -1276,8 +1252,6 @@ export class AnimeVietsubProvider extends BaseScraper {
         }
       }
       
-      console.log(`📺 Found ${servers.length} servers:`, servers.map(s => s.name).join(', '))
-
       return servers
     } catch (error) {
       console.error('AnimeVietsub getVideoServers error:', error)
@@ -1324,9 +1298,6 @@ export class AnimeVietsubProvider extends BaseScraper {
         }
       }
       
-      console.log('🔍 Extracting stream from:', embedUrl)
-      console.log('📺 Server type:', server.type)
-      
       // For DU server (storage.googleapiscdn.com iframe), we need special handling
       // The iframe itself loads an HLS player that plays video
       if (embedUrl.includes('storage.googleapiscdn.com') || server.type === 'iframe') {
@@ -1363,8 +1334,6 @@ export class AnimeVietsubProvider extends BaseScraper {
    * The player iframe loads HLS content that we need to intercept
    */
   private async extractFromDUServer(embedUrl: string, server: VideoServer): Promise<StreamInfo | null> {
-    console.log('🎬 Extracting from DU server:', embedUrl)
-    
     const crawler = await getCrawler()
     const page = await crawler.newPage()
     
@@ -1384,7 +1353,6 @@ export class AnimeVietsubProvider extends BaseScraper {
             url.includes('/video/') ||
             contentType.includes('mpegurl') ||
             contentType.includes('video/')) {
-          console.log('🎯 Intercepted:', url.substring(0, 100))
           interceptedUrls.push(url)
         }
       })
@@ -1417,7 +1385,6 @@ export class AnimeVietsubProvider extends BaseScraper {
       const streamUrl = m3u8Url || playlistUrl || mp4Url
       
       if (streamUrl) {
-        console.log('✅ Found DU stream:', streamUrl.substring(0, 100))
         // DU playlist URLs are frequently token-bound and can 403 via proxy.
         // Keep iframe playback for DU player path and let main-process frame
         // ad-cleaner strip pause ads in-place.
@@ -1475,7 +1442,6 @@ export class AnimeVietsubProvider extends BaseScraper {
         }
       }
       
-      console.log('⚠️ No clean stream found in DU extraction, fallback to iframe')
       return {
         url: embedUrl,
         type: 'iframe',
@@ -1495,8 +1461,6 @@ export class AnimeVietsubProvider extends BaseScraper {
    * Extract video using API type (data-hash)
    */
   private async extractFromAPIServer(hash: string, server: VideoServer): Promise<StreamInfo | null> {
-    console.log('🔗 Extracting from API server with hash')
-    
     // The hash is used by the site's internal API
     // We need to call the same endpoint the player uses
     try {
@@ -1569,8 +1533,6 @@ export class AnimeVietsubProvider extends BaseScraper {
       const streamUrl = m3u8Url || mp4Url
       
       if (streamUrl) {
-        console.log('✅ Found stream:', streamUrl)
-        
         if (streamUrl.includes('.m3u8')) {
           const finalM3u8 = this.toMediaProxyUrl(streamUrl, embedUrl)
           const playlist = await fetchM3U8(streamUrl, { Referer: embedUrl })
@@ -1600,7 +1562,6 @@ export class AnimeVietsubProvider extends BaseScraper {
         }
       }
       
-      console.log('⚠️ No clean stream found in generic extraction')
       return null
     } finally {
       await page.close()

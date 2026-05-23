@@ -23,10 +23,9 @@
       height: 100%;
       border: none;
     }
-    #close-btn {
+    #close-btn, .dev-btn {
       position: absolute;
       top: 20px;
-      right: 20px;
       z-index: 9999;
       background: rgba(0, 0, 0, 0.5);
       color: white;
@@ -38,8 +37,14 @@
       transition: background 0.2s;
       -webkit-app-region: no-drag;
     }
+    #close-btn {
+      right: 20px;
+    }
     #close-btn:hover {
       background: rgba(255, 0, 0, 0.7);
+    }
+    .dev-btn:hover {
+      background: rgba(37, 99, 235, 0.7);
     }
     .drag-region {
       position: absolute;
@@ -89,7 +94,7 @@
 </head>
 <body>
   <div class="drag-region"></div>
-  <button id="close-btn" onclick="window.close()">Close X</button>
+  <button id="close-btn" onclick="window.close()">✕ Đóng</button>
   <div id="loading-overlay">
     <div class="spinner"></div>
     <div class="loading-text">Đang tải và làm sạch trình phát...</div>
@@ -97,6 +102,14 @@
   <div id="player-container"></div>
 
   <script>
+    const { ipcRenderer } = require('electron');
+    
+    // Keyboard shortcut: Escape to close
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') window.close();
+    });
+
+
     window.initPlayer = function(streamInfo) {
       const container = document.getElementById('player-container');
       
@@ -104,54 +117,187 @@
         const overlay = document.getElementById('loading-overlay');
         overlay.style.display = 'flex';
         
-        // Hide overlay after 5.5 seconds (gives enough time for Anime47 SPA to load and isolate.js to clean up)
         setTimeout(() => {
           overlay.style.opacity = '0';
-          setTimeout(() => {
-            overlay.style.display = 'none';
-          }, 500);
+          setTimeout(() => { overlay.style.display = 'none'; }, 500);
         }, 5500);
 
-        // Embed webview for iframe streams (like Anime47)
-        const webview = document.createElement('webview');
-        webview.setAttribute('src', streamInfo.url);
-        if (streamInfo.headers && streamInfo.headers.Referer) {
-          webview.setAttribute('httpreferrer', streamInfo.headers.Referer);
+        const isGooglePlayer = streamInfo.url.includes('googleapiscdn.com') || streamInfo.url.includes('googleapis.com');
+        
+        const path = require('path');
+        const url = require('url');
+        const preloadPath = url.pathToFileURL(path.resolve(__dirname, 'webview-preload.js')).href;
+
+        // For Google Player: MUST load referer page first so the player thinks it's in an iframe
+        // (googleapiscdn checks window.self !== window.top and refuses to play if at top level)
+        // The preload script runs in BOTH the referer page AND the injected iframe subframe
+        // via nodeIntegrationInSubFrames=yes
+        let webviewSrc = streamInfo.url;
+        if (isGooglePlayer && streamInfo.headers && streamInfo.headers.Referer) {
+          webviewSrc = streamInfo.headers.Referer;
         }
+
+        console.log('[Renderer] Webview src:', webviewSrc, '| preload:', preloadPath);
+
+        const webview = document.createElement('webview');
+        webview.setAttribute('partition', 'persist:player-session');
+        webview.setAttribute('useragent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
         webview.setAttribute('allowpopups', 'false');
         webview.setAttribute('disablewebsecurity', '');
+        webview.setAttribute('webpreferences', 'webSecurity=no, contextIsolation=no, nodeIntegration=yes, nodeIntegrationInSubFrames=yes');
+        webview.setAttribute('preload', preloadPath);
+        webview.setAttribute('src', webviewSrc);  // src LAST so preload registers first
+
         let authInjected = false;
+        let playerInjected = false;
 
         webview.addEventListener('dom-ready', () => {
           try {
-            // Step 1: On first load, inject auth localStorage and reload so SPA sees auth
+            console.log('[Renderer Webview] dom-ready for:', webview.getURL());
+
+            // Step 1: inject auth localStorage if needed
             if (!authInjected && streamInfo.localStorageState && typeof streamInfo.localStorageState === 'object') {
               const entries = Object.entries(streamInfo.localStorageState);
               if (entries.length > 0) {
-                authInjected = true; // Set flag BEFORE reload to prevent infinite loop
+                authInjected = true;
                 const injectScript = entries
                   .map(([k, v]) => `try{localStorage.setItem(${JSON.stringify(k)},${JSON.stringify(v)})}catch(e){}`)
                   .join(';');
                 webview.executeJavaScript(injectScript)
-                  .then(() => webview.reload())
-                  .catch(() => {});
-                return; // Skip isolation until after reload
+                  .then(() => { webview.reload(); })
+                  .catch((err) => console.error('[Renderer Webview] LocalStorage inject failed:', err));
+                return;
               }
             }
 
-            // Step 2: After auth is injected (or no auth needed), run UI isolation
-            const fs = require('fs');
-            const path = require('path');
-            try {
-              const css = fs.readFileSync(path.join(__dirname, 'isolate.css'), 'utf-8');
-              const js = fs.readFileSync(path.join(__dirname, 'isolate.js'), 'utf-8');
-              webview.insertCSS(css);
-              webview.executeJavaScript(js);
-            } catch (e) {
-              console.error('Failed to inject isolation script:', e);
+            // Step 2: For Google Player, replace page body with a fullscreen iframe pointing to the actual stream
+            // This makes googleapiscdn think it's embedded (window.self !== window.top = true inside the iframe)
+            if (isGooglePlayer && !playerInjected) {
+              playerInjected = true;
+              console.log('[Renderer Webview] Injecting Google Player iframe into referer page...');
+              const streamUrl = JSON.stringify(streamInfo.url);
+              webview.executeJavaScript(`
+                (function() {
+                  window.stop();
+                  document.documentElement.innerHTML = '<head><style>*{margin:0;padding:0;overflow:hidden;background:#000}</style></head><body></body>';
+                  const f = document.createElement('iframe');
+                  f.id = '__neko_player__';
+                  f.src = ${streamUrl};
+                  f.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;border:none';
+                  f.setAttribute('allowfullscreen','true');
+                  document.body.appendChild(f);
+                  console.log('[Injected] Google Player iframe appended:', f.src);
+                })();
+              `)
+              .then(() => {
+                console.log('[Renderer Webview] Player iframe injected OK');
+
+                // Start a reliable ad-cleaner that accesses iframe.contentDocument directly.
+                // This works because webSecurity=no disables the same-origin policy for the webview.
+                const AD_TEXTS = ['Đóng quảng cáo', 'Đóng và xem tiếp', 'Quảng cáo'];
+                const AD_SRCS  = ['in88', 'quayhu', 'nohu', '188bet', 'kubet', 'w88', 'fun88'];
+                const ADBLOCK_STYLE_ID = '__neko_adblock__';
+
+                const cleanAdOverlay = () => {
+                  webview.executeJavaScript(`
+                    (function() {
+                      try {
+                        const frame = document.getElementById('__neko_player__') || document.querySelector('iframe');
+                        if (!frame) return;
+                        const doc = frame.contentDocument || frame.contentWindow && frame.contentWindow.document;
+                        if (!doc || !doc.body) return;
+
+                        // Inject persistent blocking CSS once
+                        if (!doc.getElementById('${ADBLOCK_STYLE_ID}')) {
+                          const s = doc.createElement('style');
+                          s.id = '${ADBLOCK_STYLE_ID}';
+                          s.textContent = [
+                            'img[src*="in88"],img[src*="quayhu"],img[src*="nohu"],img[src*="188bet"],',
+                            'img[src*="kubet"],img[src*="w88"],img[src*="fun88"],',
+                            '[class*="pause-ad"],[id*="pause-ad"],[class*="ads-pause"],[id*="ads-pause"],',
+                            '[class*="overlay-ad"],[id*="overlay-ad"] { display:none!important; }'
+                          ].join('');
+                          (doc.head || doc.documentElement).appendChild(s);
+                        }
+
+                        // Walk every element looking for ad text / ad image src
+                        const AD_TEXTS = ${JSON.stringify(AD_TEXTS)};
+                        const AD_SRCS  = ${JSON.stringify(AD_SRCS)};
+                        doc.querySelectorAll('div,button,a,span,img').forEach(el => {
+                          const txt = (el.innerText || el.textContent || '').trim();
+                          const src = (el.src || el.getAttribute('src') || el.getAttribute('href') || '').toLowerCase();
+                          const isAdText = AD_TEXTS.some(t => txt === t);
+                          const isAdSrc  = AD_SRCS.some(k => src.includes(k));
+                          if (!isAdText && !isAdSrc) return;
+
+                          // Walk up to find the overlay container (fixed/absolute positioned)
+                          let node = el;
+                          for (let i = 0; i < 8; i++) {
+                            const p = node.parentElement;
+                            if (!p || p === doc.body || p === doc.documentElement) break;
+                            if (p.querySelector('video') || p.querySelector('canvas')) break;
+                            const cs = window.getComputedStyle(p);
+                            if (cs.position === 'fixed' || cs.position === 'absolute') {
+                              p.remove(); return;
+                            }
+                            node = p;
+                          }
+                          el.remove();
+                        });
+                      } catch(e) { /* cross-origin not yet ready, retry */ }
+                    })();
+                  `).catch(() => {});
+                };
+
+                // Run immediately and then every 300ms
+                setTimeout(cleanAdOverlay, 800);
+                setInterval(cleanAdOverlay, 300);
+
+                // === DOM DIAGNOSTIC DUMP ===
+                // Fires once after 3s to capture ad structure for analysis.
+                // Writes to dom-dump.html in the project directory.
+                const fs = require('fs');
+                const dumpPath = require('path').join(__dirname, 'dom-dump.html');
+                setTimeout(() => {
+                  webview.executeJavaScript(`
+                    (function() {
+                      try {
+                        const frame = document.getElementById('__neko_player__') || document.querySelector('iframe');
+                        if (!frame) return 'NO_FRAME';
+                        const doc = frame.contentDocument || (frame.contentWindow && frame.contentWindow.document);
+                        if (!doc || !doc.body) return 'NO_DOC';
+                        return doc.documentElement.outerHTML;
+                      } catch(e) { return 'ERROR: ' + e.message; }
+                    })();
+                  `).then(html => {
+                    if (html && typeof html === 'string' && html.length > 100) {
+                      fs.writeFileSync(dumpPath, html, 'utf-8');
+                      console.log('[DOM Dump] Written to dom-dump.html, size:', html.length, 'chars');
+                    } else {
+                      console.warn('[DOM Dump] Got unexpected result:', html);
+                    }
+                  }).catch(e => console.error('[DOM Dump] Error:', e));
+                }, 3000);
+              })
+              .catch((err) => console.error('[Renderer Webview] Player inject failed:', err));
+              return;
+            }
+
+            // Step 3: For other providers (Anime47), run UI isolation
+            if (!isGooglePlayer) {
+              const fs = require('fs');
+              const path = require('path');
+              try {
+                const css = fs.readFileSync(path.join(__dirname, 'isolate.css'), 'utf-8');
+                const js = fs.readFileSync(path.join(__dirname, 'isolate.js'), 'utf-8');
+                webview.insertCSS(css);
+                webview.executeJavaScript(js);
+              } catch (e) {
+                console.error('[Renderer Webview] Isolation inject failed:', e);
+              }
             }
           } catch (e) {
-            console.error('dom-ready handler error:', e);
+            console.error('[Renderer Webview] dom-ready error:', e);
           }
         });
 
