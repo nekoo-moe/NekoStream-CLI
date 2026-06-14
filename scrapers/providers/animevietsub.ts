@@ -28,6 +28,7 @@ import { extractVideoFromJS, fetchM3U8 } from '../interceptor'
 import { externalApi } from '../external-api'
 import { enrichWithAniList } from '../anilist'
 import { getProviderCookieHeader } from '../auth-service'
+import { loadAuthSession } from '../../storage'
 // Extended AnimeDetail with additional metadata
 export interface AnimeDetailExtended extends AnimeDetail {
   descriptionVi?: string
@@ -57,6 +58,15 @@ export interface AnimeDetailExtended extends AnimeDetail {
 export class AnimeVietsubProvider extends BaseScraper {
   name = 'AnimeVietsub'
   baseUrl = 'https://animevietsub.site'
+
+  // Stable Chrome 124 profile to align with the player's webview user agent
+  private stableProfile = {
+    ua: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    secChUa: '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+    secChUaMobile: '?0',
+    secChUaPlatform: '"Windows"',
+    acceptLanguage: 'vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7',
+  }
 
   // User endpoints omitted in standalone CLI
   private toMediaProxyUrl(sourceUrl: string, referer: string): string {
@@ -90,7 +100,7 @@ export class AnimeVietsubProvider extends BaseScraper {
     extraHeaders: Record<string, string> = {},
     profile?: BrowserProfile
   ): Record<string, string> {
-    const p = profile ?? pickRandomProfile()
+    const p = profile ?? this.stableProfile
     const cookieHeader = getProviderCookieHeader('animevietsub')
     let headers: Record<string, string> = {
       ...buildProfileHeaders(p, `${this.baseUrl}/`),
@@ -156,8 +166,8 @@ export class AnimeVietsubProvider extends BaseScraper {
     let consecutiveBlocks = 0
 
     for (let attempt = 0; attempt <= retries; attempt++) {
-      // Botasaurus: evaluate_proxy → pickRandomProfile() per attempt
-      const profile = pickRandomProfile()
+      // Use consistent stableProfile
+      const profile = this.stableProfile
       try {
         // Botasaurus: HostThrottle — enforce request spacing per hostname
         await AnimeVietsubProvider.throttle.wait(url)
@@ -269,13 +279,14 @@ export class AnimeVietsubProvider extends BaseScraper {
   private async fetchHtmlWithPlaywright(url: string): Promise<string> {
     const { chromium } = await import('playwright')
 
-    // --- Step 1: Pull CF + session cookies from Electron default session ---
+    // --- Step 1: Pull CF + session cookies from stored session ---
     let playwrightCookies: Array<{
       name: string; value: string; domain: string; path: string;
       httpOnly: boolean; secure: boolean; sameSite: 'Strict' | 'Lax' | 'None'
     }> = []
     try {
-      const electronCookies: any[] = []
+      const session = loadAuthSession('animevietsub')
+      const electronCookies = session ? session.cookies : []
       playwrightCookies = electronCookies
         .filter(c => c.value && c.name)
         .map(c => ({
@@ -285,20 +296,20 @@ export class AnimeVietsubProvider extends BaseScraper {
           path: c.path || '/',
           httpOnly: Boolean(c.httpOnly),
           secure: Boolean(c.secure),
-          sameSite: (c.sameSite === 'strict' ? 'Strict' : c.sameSite === 'lax' ? 'Lax' : 'None') as 'Strict' | 'Lax' | 'None',
+          sameSite: (c.sameSite || 'Lax') as 'Strict' | 'Lax' | 'None',
         }))
       if (playwrightCookies.length > 0) {
         const cfCookie = playwrightCookies.find(c => c.name === 'cf_clearance')
         if (!cfCookie) console.warn('[Scraper] cf_clearance cookie missing — CF challenge may not resolve')
       } else {
-        console.warn('[Scraper] No Electron session cookies — CF challenge may not resolve. Visit the site in the app browser first.')
+        console.warn('[Scraper] No stored session cookies — CF challenge may not resolve. Visit the site/login first.')
       }
     } catch (err) {
-      console.warn('[Scraper] Could not read Electron session cookies:', err)
+      console.warn('[Scraper] Could not read stored session cookies:', err)
     }
 
     // --- Step 2: Launch headless Chromium with cookie injection ---
-    const profile = pickRandomProfile()
+    const profile = this.stableProfile
     let browser
     try {
       browser = await chromium.launch({
@@ -1260,6 +1271,15 @@ export class AnimeVietsubProvider extends BaseScraper {
   }
 
   async extractStreamUrl(server: VideoServer): Promise<StreamInfo | null> {
+    const res = await this._extractStreamUrl(server)
+    if (res) {
+      if (!res.headers) res.headers = {}
+      res.headers['User-Agent'] = this.stableProfile.ua
+    }
+    return res
+  }
+
+  private async _extractStreamUrl(server: VideoServer): Promise<StreamInfo | null> {
     try {
       let embedUrl = server.embedUrl
       

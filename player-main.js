@@ -31,6 +31,9 @@ function createWindow() {
   const playerSession = session.fromPartition('persist:player-session')
   const sessions = [session.defaultSession, playerSession]
 
+  // Inject decrypted stored cookies into sessions
+  injectStoredCookies(sessions)
+
   sessions.forEach(sess => {
     // Network-level ad-blocking (like browser extensions)
     sess.webRequest.onBeforeRequest({ urls: ['*://*/*'] }, (details, callback) => {
@@ -98,13 +101,14 @@ function createWindow() {
       callback({ cancel: false, responseHeaders })
     })
 
-    // Always inject Referer/Origin headers (needed for iframe streams like googleapiscdn)
+    // Always inject Referer/Origin/User-Agent headers (needed for iframe streams like googleapiscdn)
     if (streamInfo.headers) {
       const filter = { urls: ['*://*/*'] }
       sess.webRequest.onBeforeSendHeaders(filter, (details, callback) => {
         const headers = { ...details.requestHeaders }
         if (streamInfo.headers.Referer) headers['Referer'] = streamInfo.headers.Referer
         if (streamInfo.headers.Origin) headers['Origin'] = streamInfo.headers.Origin
+        if (streamInfo.headers['User-Agent']) headers['User-Agent'] = streamInfo.headers['User-Agent']
         callback({ requestHeaders: headers })
       })
     }
@@ -214,6 +218,73 @@ function createWindow() {
   mainWindow.on('closed', () => {
     mainWindow = null
   })
+}
+
+function injectStoredCookies(sessions) {
+  const os = require('os')
+  const fs = require('fs')
+  const crypto = require('crypto')
+  const path = require('path')
+
+  const dataDir = path.join(os.homedir(), '.nekostream-cli')
+  const authSessionsFile = path.join(dataDir, 'auth-sessions.json')
+
+  if (!fs.existsSync(authSessionsFile)) return
+
+  try {
+    const raw = fs.readFileSync(authSessionsFile, 'utf-8')
+    const parsed = JSON.parse(raw)
+    
+    const seed = `nekostream-cli:${os.hostname()}:${os.userInfo().username}:auth-v1`
+    const key = crypto.createHash('sha256').update(seed).digest()
+
+    const decrypt = (encoded) => {
+      try {
+        if (encoded.startsWith('plain:')) {
+          return Buffer.from(encoded.slice(6), 'base64').toString('utf8')
+        }
+        const [ivHex, encryptedB64] = encoded.split(':')
+        if (!ivHex || !encryptedB64) return null
+        const iv = Buffer.from(ivHex, 'hex')
+        const encrypted = Buffer.from(encryptedB64, 'base64')
+        const decipher = crypto.createDecipheriv('aes-256-cbc', key, iv)
+        return Buffer.concat([decipher.update(encrypted), decipher.final()]).toString('utf8')
+      } catch (e) {
+        return null
+      }
+    }
+
+    for (const [provider, encoded] of Object.entries(parsed)) {
+      const decrypted = decrypt(encoded)
+      if (!decrypted) continue
+      const sessionData = JSON.parse(decrypted)
+      
+      if (sessionData && sessionData.cookies) {
+        for (const cookie of sessionData.cookies) {
+          const domainNoDot = cookie.domain.startsWith('.') ? cookie.domain.slice(1) : cookie.domain
+          const url = (cookie.secure ? 'https://' : 'http://') + domainNoDot + cookie.path
+          const cookieDetails = {
+            url,
+            name: cookie.name,
+            value: cookie.value,
+            domain: cookie.domain,
+            path: cookie.path,
+            secure: cookie.secure,
+            httpOnly: cookie.httpOnly,
+            expirationDate: cookie.expirationDate
+          }
+          for (const sess of sessions) {
+            sess.cookies.set(cookieDetails).catch(err => {
+              // Silent catch to prevent startup crashes on invalid cookie fields
+            })
+          }
+        }
+      }
+    }
+    console.log('[Main] Decrypted and injected saved session cookies.')
+  } catch (err) {
+    console.error('[Main] Failed to inject stored cookies:', err)
+  }
 }
 
 app.whenReady().then(createWindow)
