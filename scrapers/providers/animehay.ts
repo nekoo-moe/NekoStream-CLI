@@ -23,7 +23,7 @@ import {
   StreamInfo,
   DailySchedule,
 } from '../base'
-import { enrichWithAniList } from '../anilist'
+import { externalApi } from '../external-api'
 
 // ─── Helper types ────────────────────────────────────────────────────────────
 
@@ -293,17 +293,22 @@ export class AnimehayProvider extends BaseScraper {
       const imgSrc = ogImage || $('img.film-poster, img[class*="poster"], img[class*="cover"]').first().attr('src') || ''
       let thumbnail = this.absolutizeUrl(imgSrc)
 
-      // Description
-      const description = (
-        $('meta[name="description"]').attr('content') ||
-        $('.film-description, .description, [class*="desc"]').first().text()
-      ).trim() || undefined
+      // Description. Prefer the longest detail-page text, then meta fallback.
+      const descriptionCandidates = [
+        $('.film-description, .description, [class*="desc"], .content-film, .film-content').first().text().trim(),
+        $('.film-description p, .description p, [class*="desc"] p').map((_, el) => $(el).text().trim()).get().join(' '),
+        $('meta[name="description"]').attr('content') || ''
+      ].filter(Boolean)
+      let description = descriptionCandidates.sort((a, b) => b.length - a.length)[0] || undefined
 
       // Genres
       const genres: string[] = []
-      $('a[href*="/the-loai/"]').each((_, el) => {
-        const g = $(el).text().trim()
-        if (g && g.length > 1 && !genres.includes(g)) genres.push(g)
+      const addGenre = (raw?: string) => {
+        const genre = this.decodeHtml(String(raw || '').trim())
+        if (genre && genre.length > 1 && !genres.includes(genre)) genres.push(genre)
+      }
+      $('a[href*="/the-loai/"], a[href*="/genre/"], a[href*="/genres/"]').each((_, el) => {
+        addGenre($(el).text().trim() || $(el).attr('title'))
       })
 
       // Status / Year / Episode count from info section
@@ -360,12 +365,19 @@ export class AnimehayProvider extends BaseScraper {
       let cover = thumbnail
       let banner: string | undefined
       try {
-        const anilist = await enrichWithAniList(title)
-        if (anilist.cover) {
-          cover = anilist.cover   // high-res portrait (extraLarge ~475px)
-          thumbnail = anilist.cover
+        const anilistMeta = await externalApi.getEnhancedMetadata(title, titleAlt)
+        if (anilistMeta?.cover) {
+          cover = anilistMeta.cover
+          thumbnail = anilistMeta.cover
         }
-        if (anilist.banner) banner = anilist.banner  // 1900×400 landscape
+        if (anilistMeta?.banner) banner = anilistMeta.banner
+        if ((!description || description.endsWith('...') || description.length < 80) && anilistMeta?.synopsis) {
+          description = anilistMeta.synopsis
+        }
+        if (genres.length === 0 && anilistMeta?.genres?.length) {
+          anilistMeta.genres.forEach(addGenre)
+        }
+        if (!episodeCount && anilistMeta?.episodes) episodeCount = anilistMeta.episodes
       } catch { /* non-fatal */ }
 
       const detail: AnimeDetail = {

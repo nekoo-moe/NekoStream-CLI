@@ -3,6 +3,7 @@
 
 import { chromium, Browser, BrowserContext, Page } from 'playwright'
 import { EventEmitter } from 'events'
+import { debugLog } from '../logger'
 
 export interface CrawlerOptions {
   headless?: boolean
@@ -101,7 +102,7 @@ export class PlaywrightCrawler extends EventEmitter {
       )
     })
 
-    console.log('✅ Playwright crawler initialized')
+    debugLog('[ok] Playwright crawler initialized')
   }
 
   async close(): Promise<void> {

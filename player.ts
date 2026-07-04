@@ -31,7 +31,7 @@ async function repairElectron(basePath: string): Promise<string> {
   const platform = process.platform
   const arch = process.arch
 
-  console.log(`📥 Downloading Electron v${version} for ${platform}-${arch}...`)
+  console.log(`[download] Downloading Electron v${version} for ${platform}-${arch}...`)
   
   const { downloadArtifact } = require('@electron/get')
   const zipPath = await downloadArtifact({
@@ -41,7 +41,7 @@ async function repairElectron(basePath: string): Promise<string> {
     arch
   })
   
-  console.log(`📦 Extracting Electron zip to dist...`)
+  console.log('[extract] Extracting Electron zip to dist...')
   const distDir = path.join(basePath, 'node_modules', 'electron', 'dist')
   fs.mkdirSync(distDir, { recursive: true })
 
@@ -51,15 +51,15 @@ async function repairElectron(basePath: string): Promise<string> {
       const extract = require('extract-zip')
       await extract(zipPath, { dir: distDir })
     }, 10000)
-    console.log('✅ Extraction via extract-zip complete!')
+    console.log('[ok] Extraction via extract-zip complete.')
   } catch (extractErr) {
-    console.log('⚠️ extract-zip timed out or failed. Falling back to native system extraction...')
+    console.log('[warn] extract-zip timed out or failed. Falling back to native system extraction...')
     if (process.platform === 'win32') {
       execSync(`powershell -Command "Expand-Archive -Path '${zipPath}' -DestinationPath '${distDir}' -Force"`, { stdio: 'inherit' })
     } else {
       execSync(`unzip -o "${zipPath}" -d "${distDir}"`, { stdio: 'inherit' })
     }
-    console.log('✅ Extraction via native fallback complete!')
+    console.log('[ok] Extraction via native fallback complete.')
   }
 
   // Move types if present
@@ -105,10 +105,10 @@ export async function launchPlayer(streamInfo: StreamInfo) {
       throw new Error('Electron binary executable file not found')
     }
   } catch (e) {
-    console.log('⚠️  Electron is not installed correctly or missing. Attempting automatic download/repair...')
+    console.log('[warn] Electron is not installed correctly or missing. Attempting automatic download/repair...')
     try {
       electronBinary = await repairElectron(basePath)
-      console.log('✅ Electron repaired successfully!')
+      console.log('[ok] Electron repaired successfully.')
     } catch (repairErr: any) {
       throw new Error(`Failed to resolve or install Electron automatically. Please run "npm install electron" or "node node_modules/electron/install.js" manually.\nDetails: ${repairErr.message}`)
     }

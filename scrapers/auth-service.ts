@@ -950,7 +950,7 @@ export async function loginAnime47Interactive(): Promise<ProviderAuthStatus> {
       if (capturedToken) {
         console.log(`[Auth] JWT captured from localStorage scan`)
       } else {
-        console.log(`[Auth] ⚠ No JWT token found. Will try cookie-based auth.`)
+        console.log(`[Auth] No JWT token found. Will try cookie-based auth.`)
       }
     }
 
@@ -1066,10 +1066,10 @@ export async function loginAnime47Interactive(): Promise<ProviderAuthStatus> {
     saveAuthSession('anime47', session)
 
     if (capturedToken) {
-      console.log(`[Auth] Anime47: Đăng nhập thành công với JWT token! ✅`)
+      console.log(`[Auth] Anime47: Đăng nhập thành công với JWT token!`)
     } else {
       console.log(`[Auth] Anime47: Đăng nhập thành công (${cookies.length} cookies, không có JWT)`)
-      console.log(`[Auth] ⚠ Nếu bị 401, hãy đăng xuất và đăng nhập lại`)
+      console.log(`[Auth] Nếu bị 401, hãy đăng xuất và đăng nhập lại`)
     }
     if (userDisplayName) console.log(`[Auth] Logged in as: ${userDisplayName}`)
     if (userId) console.log(`[Auth] User ID: ${userId}`)

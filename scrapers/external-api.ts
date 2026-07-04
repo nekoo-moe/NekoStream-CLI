@@ -3,6 +3,7 @@
 
 import { anilistApi, type AniListAnimeData } from './anilist-api'
 import { jikanApi } from './jikan-api'
+import { debugLog, debugError } from '../logger'
 
 export class ExternalApiService {
   /**
@@ -10,16 +11,16 @@ export class ExternalApiService {
    */
   async getCoverImage(title: string, titleAlt?: string): Promise<string | null> {
     try {
-      console.log('[ExternalAPI] Fetching cover for:', titleAlt?.split(',')[0] || title)
+      debugLog('[ExternalAPI] Fetching cover for:', titleAlt?.split(',')[0] || title)
       const meta = await anilistApi.getEnhancedMetadata(title, titleAlt)
       if (meta?.cover) {
-        console.log('[ExternalAPI] ✅ Got AniList cover:', meta.cover.substring(0, 70) + '...')
+        debugLog('[ExternalAPI] Got AniList cover:', meta.cover.substring(0, 70) + '...')
         return meta.cover
       }
-      console.log('[ExternalAPI] ⚠️ No cover found for:', titleAlt?.split(',')[0] || title)
+      debugLog('[ExternalAPI] No cover found for:', titleAlt?.split(',')[0] || title)
       return null
     } catch (error) {
-      console.error('getCoverImage error:', error)
+      debugError('getCoverImage error:', error)
       return null
     }
   }
@@ -31,7 +32,7 @@ export class ExternalApiService {
     try {
       return await jikanApi.getAnimeCover(title, titleAlt)
     } catch (error) {
-      console.error('getJikanCover error:', error)
+      debugError('getJikanCover error:', error)
       return null
     }
   }
@@ -43,7 +44,7 @@ export class ExternalApiService {
     try {
       return await anilistApi.getBannerImage(title, titleAlt)
     } catch (error) {
-      console.error('getBannerImage error:', error)
+      debugError('getBannerImage error:', error)
       return null
     }
   }
@@ -56,7 +57,7 @@ export class ExternalApiService {
     try {
       return await anilistApi.getEnhancedMetadata(title, titleAlt)
     } catch (error) {
-      console.error('getEnhancedMetadata error:', error)
+      debugError('getEnhancedMetadata error:', error)
       return null
     }
   }

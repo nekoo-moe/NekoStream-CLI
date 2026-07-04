@@ -29,6 +29,7 @@ import { externalApi } from '../external-api'
 import { enrichWithAniList } from '../anilist'
 import { getProviderCookieHeader } from '../auth-service'
 import { loadAuthSession } from '../../storage'
+import { debugWarn } from '../../logger'
 // Extended AnimeDetail with additional metadata
 export interface AnimeDetailExtended extends AnimeDetail {
   descriptionVi?: string
@@ -183,17 +184,17 @@ export class AnimeVietsubProvider extends BaseScraper {
           const err = new Error(`HTTP ${response.status}: ${response.statusText || 'Blocked'}`)
           lastError = err
           if (attempt < retries) {
-            console.warn(`[Scraper] HTTP ${response.status} on attempt ${attempt + 1}/${retries + 1} for ${url} — retrying with new profile...`)
+            debugWarn(`[Scraper] HTTP ${response.status} on attempt ${attempt + 1}/${retries + 1} for ${url} — retrying with new profile...`)
             await this.jitteredWait(attempt)
             continue
           }
           // Auto-cache host as blocked after exhausting retries
           if (hostname) {
             AnimeVietsubProvider.blockedHostCache.add(hostname)
-            console.warn(`[Scraper] Added "${hostname}" to blocked-host cache`)
+            debugWarn(`[Scraper] Added "${hostname}" to blocked-host cache`)
           }
           if (useBrowserFallback) {
-            console.warn(`[Scraper] Blocked (${response.status}) after ${consecutiveBlocks} attempt(s), escalating to Playwright for ${url}`)
+            debugWarn(`[Scraper] Blocked (${response.status}) after ${consecutiveBlocks} attempt(s), escalating to Playwright for ${url}`)
             return await this.fetchHtmlWithPlaywright(url)
           }
           throw new Error(`Lỗi kết nối: HTTP ${response.status}`)
@@ -208,13 +209,13 @@ export class AnimeVietsubProvider extends BaseScraper {
         // Botasaurus: CloudflareDetectionException — detect CF challenge on 200 response
         if (isCloudflareChallengePage(html)) {
           consecutiveBlocks++
-          console.warn(`[Scraper] CF challenge page detected on attempt ${attempt + 1}/${retries + 1} for ${url}`)
+          debugWarn(`[Scraper] CF challenge page detected on attempt ${attempt + 1}/${retries + 1} for ${url}`)
           if (attempt < retries) {
             await this.jitteredWait(attempt)
             continue
           }
           if (useBrowserFallback) {
-            console.warn(`[Scraper] CF challenge persists, escalating to Playwright for ${url}`)
+            debugWarn(`[Scraper] CF challenge persists, escalating to Playwright for ${url}`)
             return await this.fetchHtmlWithPlaywright(url)
           }
           throw new Error('Lỗi kết nối: Cloudflare challenge không thể vượt qua')
@@ -230,12 +231,12 @@ export class AnimeVietsubProvider extends BaseScraper {
         if (isBlockedError(error)) {
           consecutiveBlocks++
           if (attempt < retries) {
-            console.warn(`[Scraper] Block error on attempt ${attempt + 1}/${retries + 1} — retrying...`)
+            debugWarn(`[Scraper] Block error on attempt ${attempt + 1}/${retries + 1} — retrying...`)
             await this.jitteredWait(attempt)
             continue
           }
           if (useBrowserFallback) {
-            console.warn(`[Scraper] Block error exhausted retries, escalating to Playwright for ${url}`)
+            debugWarn(`[Scraper] Block error exhausted retries, escalating to Playwright for ${url}`)
             return await this.fetchHtmlWithPlaywright(url)
           }
           throw new Error(`Lỗi kết nối: ${(error as Error).message}`)
@@ -300,12 +301,12 @@ export class AnimeVietsubProvider extends BaseScraper {
         }))
       if (playwrightCookies.length > 0) {
         const cfCookie = playwrightCookies.find(c => c.name === 'cf_clearance')
-        if (!cfCookie) console.warn('[Scraper] cf_clearance cookie missing — CF challenge may not resolve')
+        if (!cfCookie) debugWarn('[Scraper] cf_clearance cookie missing — CF challenge may not resolve')
       } else {
-        console.warn('[Scraper] No stored session cookies — CF challenge may not resolve. Visit the site/login first.')
+        debugWarn('[Scraper] No stored session cookies — CF challenge may not resolve. Visit the site/login first.')
       }
     } catch (err) {
-      console.warn('[Scraper] Could not read stored session cookies:', err)
+      debugWarn('[Scraper] Could not read stored session cookies:', err)
     }
 
     // --- Step 2: Launch headless Chromium with cookie injection ---
@@ -464,7 +465,7 @@ export class AnimeVietsubProvider extends BaseScraper {
     }
 
     // Absolute fallback: return empty cheerio selection
-    console.warn('[Scraper] selectCardElements: no matching strategy found, returning empty set')
+    debugWarn('[Scraper] selectCardElements: no matching strategy found, returning empty set')
     return $([])
   }
 
@@ -680,12 +681,12 @@ export class AnimeVietsubProvider extends BaseScraper {
       if (results.length > 0) return results.slice(0, 48)
 
       // Only fallback to search when HTML parsed OK but yielded 0 cards (not a 403/down scenario)
-      console.warn('[Scraper] getHomeCards: HTML loaded but 0 cards parsed, trying search fallback')
+      debugWarn('[Scraper] getHomeCards: HTML loaded but 0 cards parsed, trying search fallback')
       return this.search('anime')
     } catch (error) {
       // Site is temporarily down — propagate as a typed error so UI can show proper message
       if (error instanceof SiteDownError) {
-        console.warn(`[Scraper] getHomeCards(${section}): ${error.message}`)
+        debugWarn(`[Scraper] getHomeCards(${section}): ${error.message}`)
         throw error
       }
       console.error(`[Scraper] getHomeCards(${section}) error:`, error)
@@ -738,7 +739,7 @@ export class AnimeVietsubProvider extends BaseScraper {
       } catch (error) {
         // Site down — re-throw immediately, don't try other URLs
         if (error instanceof SiteDownError) throw error
-        console.warn('[Scraper] Search attempt failed for', searchUrl, error)
+        debugWarn('[Scraper] Search attempt failed for', searchUrl, error)
       }
     }
 
@@ -790,12 +791,73 @@ export class AnimeVietsubProvider extends BaseScraper {
                   $('meta[itemprop="image"]').first().attr('content') || thumbnail
       cover = this.absolutizeUrl(cover)
 
-      // Extract descriptions (VI/EN)
-      let descriptionVi = $('.Description, .desc, .summary, [itemprop="description"]').first().text().trim() || undefined
+      const normalizeInfoText = (value: string) => value.replace(/\s+/g, ' ').trim()
+      const infoLabelPattern = /(Tập mới|Trạng thái|Thể loại|Đạo diễn|Quốc gia|Số người theo dõi|Thời lượng|Ngôn ngữ|Chất lượng|Studio|Season|Lượt Xem)\s*:/gi
+      const looksLikeInfoBlock = (value?: string) => {
+        if (!value) return false
+        return (normalizeInfoText(value).match(infoLabelPattern) || []).length >= 2
+      }
+      const looksVietnamese = (value?: string) => {
+        if (!value) return false
+        return /[àáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹđ]/i.test(value) ||
+          /\b(người|một|của|và|không|nhưng|phải|đã|để|trong|tình|gia tộc|sát thủ|kết hôn)\b/i.test(value)
+      }
+      const cleanDescriptionCandidate = (value?: string) => {
+        const cleaned = normalizeInfoText(this.decodeHtml(String(value || '')))
+        if (!cleaned || cleaned.length < 40 || looksLikeInfoBlock(cleaned)) return ''
+        return cleaned
+      }
+      const extractInfoValue = (text: string, label: RegExp) => {
+        const normalized = normalizeInfoText(text)
+        const match = normalized.match(label)
+        if (!match || match.index === undefined) return ''
+        const start = match.index + match[0].length
+        const rest = normalized.slice(start)
+        const nextLabel = rest.search(infoLabelPattern)
+        return (nextLabel >= 0 ? rest.slice(0, nextLabel) : rest).trim()
+      }
+
+      // Extract descriptions (VI/EN). Prefer synopsis blocks, not the metadata panel.
+      const descriptionSelectors = [
+        '.Description',
+        '.desc',
+        '.summary',
+        '.Synopsis',
+        '.synopsis',
+        '.overview',
+        '.MovieDescription',
+        '.entry-content .Description',
+        '.post-content .Description',
+        '.TPost .Description',
+        '.TPost .desc',
+        '.TPost .summary',
+        '[itemprop="description"]',
+        '[class*="description"]',
+        '[class*="Description"]',
+        '[class*="desc"]',
+        '[class*="Desc"]',
+        '[class*="summary"]',
+        '[class*="Summary"]'
+      ]
+      const descriptionCandidates: string[] = []
+      for (const selector of descriptionSelectors) {
+        $(selector).each((_, el) => {
+          const $el = $(el).clone()
+          $el.find('script, style, nav, a[href*="/the-loai/"], a[href*="/tag/"], .InfoList, .MovieInfo, .breadcrumb').remove()
+          const candidate = cleanDescriptionCandidate($el.text())
+          if (candidate && !descriptionCandidates.includes(candidate)) descriptionCandidates.push(candidate)
+        })
+      }
+      let descriptionVi = descriptionCandidates
+        .filter(looksVietnamese)
+        .sort((a, b) => b.length - a.length)[0] ||
+        descriptionCandidates.sort((a, b) => b.length - a.length)[0] ||
+        undefined
       const metaDesc = $('meta[name="description"]').attr('content') || $('meta[property="og:description"]').attr('content') || ''
-      if (metaDesc && (!descriptionVi || descriptionVi.endsWith('...') || descriptionVi.endsWith('....') || descriptionVi.length < metaDesc.length)) {
-        if (metaDesc.includes(' ') && metaDesc.length > (descriptionVi?.length || 0)) {
-          descriptionVi = metaDesc.trim()
+      const cleanMetaDesc = cleanDescriptionCandidate(metaDesc)
+      if (cleanMetaDesc && (!descriptionVi || (!looksVietnamese(descriptionVi) && looksVietnamese(cleanMetaDesc)) || descriptionVi.endsWith('...') || descriptionVi.endsWith('....'))) {
+        if (cleanMetaDesc.includes(' ')) {
+          descriptionVi = cleanMetaDesc
         }
       }
 
@@ -804,12 +866,13 @@ export class AnimeVietsubProvider extends BaseScraper {
         undefined
       if (!descriptionEn) {
         const enMeta = $('meta[property="og:description"]').attr('content') || ''
-        descriptionEn = enMeta.includes(' ') ? enMeta.trim() : undefined
+        descriptionEn = enMeta.includes(' ') && !looksLikeInfoBlock(enMeta) ? enMeta.trim() : undefined
       }
-      const description = descriptionVi || descriptionEn
+      let description = descriptionVi || descriptionEn
 
       // Extract rating from JSON-LD schema or star rating
       let rating: number | undefined
+      let schemaDescription: string | undefined
       // ratingCount extracted but not yet surfaced in AnimeDetail schema — kept for future use
       // ratingCount collected but not yet in AnimeDetail return schema
       // Try JSON-LD first
@@ -817,10 +880,15 @@ export class AnimeVietsubProvider extends BaseScraper {
       if (jsonLdScript) {
         try {
           const jsonLd = JSON.parse(jsonLdScript)
+          if (typeof jsonLd.description === 'string' && !looksLikeInfoBlock(jsonLd.description)) schemaDescription = jsonLd.description.trim()
           if (jsonLd.aggregateRating) {
             rating = parseFloat(jsonLd.aggregateRating.ratingValue)
           }
         } catch (e) {}
+      }
+      if (schemaDescription && (!descriptionVi || (!looksVietnamese(descriptionVi) && looksVietnamese(schemaDescription)))) {
+        descriptionVi = schemaDescription
+        description = schemaDescription
       }
       
       // Fallback to DOM
@@ -833,13 +901,30 @@ export class AnimeVietsubProvider extends BaseScraper {
 
       // Extract tags/genres ONLY from anime-info container to avoid pulling global site tags
       const infoRoot = $('.TPost, .MovieInfo, .InfoList, .Description').first()
-      const tagCandidates = infoRoot.length > 0 ? infoRoot.find('a[href*="/the-loai/"], a[href*="/tag/"]') : $('a[href*="/the-loai/"], a[href*="/tag/"]')
+      const tagCandidates = infoRoot.length > 0
+        ? infoRoot.find('a[href*="/the-loai/"], a[href*="/tag/"], a[href*="/genres/"], a[href*="/genre/"]')
+        : $('a[href*="/the-loai/"], a[href*="/tag/"], a[href*="/genres/"], a[href*="/genre/"]')
       const genres: string[] = []
+      const addGenre = (raw?: string) => {
+        const genre = this.decodeHtml(String(raw || '').replace(/^Phim\s+/i, '').trim())
+        if (genre && genre.length > 1 && !/^(xem|anime|phim|trang chủ|home)$/i.test(genre) && !genres.includes(genre)) {
+          genres.push(genre)
+        }
+      }
       tagCandidates.each((_, el) => {
         const genre = $(el).attr('title') || $(el).text().trim()
-        if (genre && !genres.includes(genre)) genres.push(this.decodeHtml(genre))
+        addGenre(genre)
       })
-      const tags = [...genres]
+      $('.InfoList li, .Info li, p.Info span, .MovieInfo li, .MovieInfo span').each((_, el) => {
+        const text = $(el).text().replace(/\s+/g, ' ').trim()
+        const genreText = extractInfoValue(text, /(Thể loại|Thá»ƒ loáº¡i|Genre|Genres)\s*:/i)
+        if (genreText) {
+          genreText
+            .split(/[,/|;]+/)
+            .forEach(addGenre)
+        }
+      })
+      let tags = [...genres]
 
       // Extract info from InfoList
       let status: string | undefined
@@ -857,26 +942,33 @@ export class AnimeVietsubProvider extends BaseScraper {
       $('.InfoList li, .Info li, p.Info span').each((_, el) => {
         const text = $(el).text().trim()
         
-        if (text.includes('Trạng thái:')) {
-          status = text.replace('Trạng thái:', '').trim()
+        const statusValue = extractInfoValue(text, /Trạng thái\s*:/i)
+        if (statusValue) {
+          status = statusValue.replace(/\/?\s*Cập\s*Nhật.*$/i, '').trim() || statusValue
         }
-        if (text.includes('Đạo diễn:')) {
-          director = text.replace('Đạo diễn:', '').trim()
+        const directorValue = extractInfoValue(text, /Đạo diễn\s*:/i)
+        if (directorValue) {
+          director = directorValue
         }
-        if (text.includes('Studio:')) {
-          studio = $(el).find('a').text().trim() || text.replace('Studio:', '').trim()
+        const studioValue = extractInfoValue(text, /Studio\s*:/i)
+        if (studioValue) {
+          studio = $(el).find('a').text().trim() || studioValue
         }
-        if (text.includes('Quốc gia:')) {
-          country = $(el).find('a').text().trim() || text.replace('Quốc gia:', '').trim()
+        const countryValue = extractInfoValue(text, /Quốc gia\s*:/i)
+        if (countryValue) {
+          country = $(el).find('a').text().trim() || countryValue
         }
-        if (text.includes('Ngôn ngữ:')) {
-          language = text.replace('Ngôn ngữ:', '').trim()
+        const languageValue = extractInfoValue(text, /Ngôn ngữ\s*:/i)
+        if (languageValue) {
+          language = languageValue
         }
-        if (text.includes('Chất lượng:')) {
-          quality = $(el).find('.Qlty').text().trim() || text.replace('Chất lượng:', '').trim()
+        const qualityValue = extractInfoValue(text, /Chất lượng\s*:/i)
+        if (qualityValue) {
+          quality = $(el).find('.Qlty').text().trim() || qualityValue
         }
-        if (text.includes('Thời lượng:')) {
-          const epMatch = text.match(/(\d+)\//)
+        const durationValue = extractInfoValue(text, /Thời lượng\s*:/i)
+        if (durationValue) {
+          const epMatch = durationValue.match(/(\d+)\//)
           if (epMatch) totalEpisodes = parseInt(epMatch[1])
         }
         if (text.includes('Lượt Xem') || text.includes('Số người theo dõi:')) {
@@ -944,13 +1036,23 @@ export class AnimeVietsubProvider extends BaseScraper {
       const episodeCount = $('.list-episode a.episode-link, .list-episode li.episode a').length || 
                            $('a[href*="/tap-"]').length || undefined
 
-      // Fetch AniList metadata (cover + banner) in one session-cached call
+      // Fetch AniList metadata (cover + banner + fallback synopsis/genres) in one session-cached call
       let enhancedCover = cover
       let enhancedBanner: string | undefined = undefined
       try {
         const anilistMeta = await externalApi.getEnhancedMetadata(title, titleAlt)
         if (anilistMeta?.cover) enhancedCover = anilistMeta.cover
         if (anilistMeta?.banner) enhancedBanner = anilistMeta.banner
+        if ((!description || description.endsWith('...') || description.length < 80) && anilistMeta?.synopsis) {
+          description = anilistMeta.synopsis
+          descriptionEn = anilistMeta.synopsis
+        }
+        if (genres.length === 0 && anilistMeta?.genres?.length) {
+          anilistMeta.genres.forEach(addGenre)
+          tags = [...genres]
+        }
+        if (!status && anilistMeta?.status) status = anilistMeta.status
+        if (!totalEpisodes && anilistMeta?.episodes) totalEpisodes = anilistMeta.episodes
       } catch { /* non-fatal */ }
 
       const imdbText = $('.InfoList, .Info, .MovieInfo').text()

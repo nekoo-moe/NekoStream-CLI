@@ -1,4 +1,5 @@
 // AniList API service for fetching anime metadata and images
+import { debugLog, debugWarn, debugError } from '../logger'
 // Uses GraphQL API - https://docs.anilist.co/guide/introduction
 
 // ============ TypeScript Interfaces ============
@@ -229,7 +230,7 @@ export class AniListApiService {
           // Dynamic throttling based on remaining requests
           if (this.rateLimitRemaining <= 5 && now < this.rateLimitReset) {
             const waitTime = this.rateLimitReset - now
-            console.log(`[AniList] Rate limit low (${this.rateLimitRemaining} left). Waiting ${waitTime}ms...`)
+            debugLog(`[AniList] Rate limit low (${this.rateLimitRemaining} left). Waiting ${waitTime}ms...`)
             await new Promise(r => setTimeout(r, waitTime + 500))
           } else {
             // Soft delay to spread out requests sequentially
@@ -269,7 +270,7 @@ export class AniListApiService {
             if (this.rateLimitReset && this.rateLimitReset > Date.now()) {
               waitTime = Math.max(waitTime, this.rateLimitReset - Date.now())
             }
-            console.warn(`[AniList] Rate limited! Waiting ${waitTime}ms...`)
+            debugWarn(`[AniList] Rate limited! Waiting ${waitTime}ms...`)
             await new Promise(r => setTimeout(r, waitTime + 1000))
             const result = await this.graphqlRequest<T>(query, variables)
             resolve(result)
@@ -323,7 +324,7 @@ export class AniListApiService {
       }
       return results
     } catch (error) {
-      console.error(`AniList searchAnime error for "${title}":`, error)
+      debugError(`AniList searchAnime error for "${title}":`, error)
       return []
     }
   }
@@ -346,7 +347,7 @@ export class AniListApiService {
       if (anime) setCache(cacheKey, anime)
       return anime
     } catch (error) {
-      console.error(`AniList getAnimeById error for ID ${anilistId}:`, error)
+      debugError(`AniList getAnimeById error for ID ${anilistId}:`, error)
       return null
     }
   }
@@ -369,7 +370,7 @@ export class AniListApiService {
       if (anime) setCache(cacheKey, anime)
       return anime
     } catch (error) {
-      console.error(`AniList getAnimeByMalId error for MAL ID ${malId}:`, error)
+      debugError(`AniList getAnimeByMalId error for MAL ID ${malId}:`, error)
       return null
     }
   }
@@ -432,26 +433,26 @@ export class AniListApiService {
     const validQueries = queriesToTry.filter(isUsableQuery)
 
     if (validQueries.length === 0) {
-      console.log(`[AniList] All queries filtered out (too short/acronym) for: "${title}" / "${titleAlt}"`)
+      debugLog(`[AniList] All queries filtered out (too short/acronym) for: "${title}" / "${titleAlt}"`)
       return null
     }
 
     for (const query of validQueries) {
-      console.log('[AniList] Searching with query:', query)
+      debugLog('[AniList] Searching with query:', query)
       const results = await this.searchAnime(query)
 
       if (results.length > 0) {
         const match = this.findBestMatch(results, title, titleAlt)
         if (match) {
-          console.log(`[AniList] ✅ Matched: "${match.title.romaji}" (score threshold passed)`)
+          debugLog(`[AniList] Matched: "${match.title.romaji}" (score threshold passed)`)
           return match
         }
         // Got results but no confident match → try next variant
-        console.log(`[AniList] Results found for "${query}" but no confident match, trying next...`)
+        debugLog(`[AniList] Results found for "${query}" but no confident match, trying next...`)
       }
     }
 
-    console.log(`[AniList] No match found for: "${title}" / "${titleAlt}"`)
+    debugLog(`[AniList] No match found for: "${title}" / "${titleAlt}"`)
     return null
   }
 
@@ -465,11 +466,11 @@ export class AniListApiService {
 
       const cover = match.coverImage.extraLarge || match.coverImage.large || match.coverImage.medium || null
       if (cover) {
-        console.log('[AniList] Found cover for', match.title.romaji, ':', cover.substring(0, 50))
+        debugLog('[AniList] Found cover for', match.title.romaji, ':', cover.substring(0, 50))
       }
       return cover
     } catch (error) {
-      console.error('AniList getCoverImage error:', error)
+      debugError('AniList getCoverImage error:', error)
       return null
     }
   }
@@ -484,13 +485,13 @@ export class AniListApiService {
 
       const banner = match.bannerImage || null
       if (banner) {
-        console.log('[AniList] Found banner for', match.title.romaji)
+        debugLog('[AniList] Found banner for', match.title.romaji)
       } else {
-        console.log('[AniList] No banner available for:', match.title.romaji)
+        debugLog('[AniList] No banner available for:', match.title.romaji)
       }
       return banner
     } catch (error) {
-      console.error('AniList getBannerImage error:', error)
+      debugError('AniList getBannerImage error:', error)
       return null
     }
   }
@@ -517,7 +518,7 @@ export class AniListApiService {
         genres: match.genres,
       }
     } catch (error) {
-      console.error('AniList getEnhancedMetadata error:', error)
+      debugError('AniList getEnhancedMetadata error:', error)
       return null
     }
   }

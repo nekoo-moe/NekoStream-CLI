@@ -6,7 +6,7 @@ import chalk from 'chalk'
 import ora from 'ora'
 import { providers, getProvider } from './providers'
 import { launchPlayer } from './player'
-import { clearScreen, printBanner, drawAnimeCard } from './ui'
+import { clearScreen, printBanner, drawAnimeCard, drawAnimeInfoCard, printEmpty, printError, printSuccess } from './ui'
 import { loadSettings, saveSettings, loadHistory, saveHistoryEntry, clearHistory } from './storage'
 import { initDiscord, toggleDiscordPresence, setBrowsingPresence, setWatchingPresence, clearDiscordPresence } from './discord'
 import type { AnimeDetail, AnimeSearchResult } from './scrapers/base'
@@ -26,11 +26,21 @@ async function sleep(ms: number) {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
 
+function formatToggle(value?: boolean) {
+  return value ? chalk.green('Bật') : chalk.red('Tắt')
+}
+
+function flushStdin() {
+  if (!process.stdin.isTTY) return
+  process.stdin.resume()
+  while (process.stdin.read() !== null) { }
+}
+
 async function showSettingsMenu() {
   setBrowsingPresence('Đang cài đặt Client', undefined, 'Cài đặt')
   while (true) {
     clearScreen()
-    printBanner('Settings', 'Configure your default preferences')
+    printBanner('Cài đặt', 'Tùy chỉnh trải nghiệm xem và nhà cung cấp')
 
     const settings = loadSettings()
 
@@ -40,14 +50,13 @@ async function showSettingsMenu() {
       message: 'Cấu hình hệ thống (Esc: Thoát)',
       choices: [
         { separator: 'CẤU HÌNH' },
-        { title: `Default Provider: ${chalk.green(settings.defaultProvider)}`, value: 'provider' },
-        { title: `Default Quality: ${chalk.green(settings.defaultQuality)}`, value: 'quality' },
-        { title: `Auto-Play Next: ${settings.autoPlayNext ? chalk.green('ON') : chalk.red('OFF')}`, value: 'autoplay' },
-        { title: `Discord RPC: ${settings.discordRpcEnabled ? chalk.green('ON') : chalk.red('OFF')}`, value: 'discord' },
-        { title: `Developer Mode (Preserve Logs): ${settings.developerMode ? chalk.green('ON') : chalk.red('OFF')}`, value: 'devmode' },
-        { title: `Configure Domains`, value: 'domains' },
+        { title: `Provider mặc định: ${chalk.green(settings.defaultProvider)}`, value: 'provider' },
+        { title: `Chất lượng mặc định: ${chalk.green(settings.defaultQuality)}`, value: 'quality' },
+        { title: `Tự phát tập tiếp theo: ${formatToggle(settings.autoPlayNext)}`, value: 'autoplay' },
+        { title: `Discord RPC: ${formatToggle(settings.discordRpcEnabled)}`, value: 'discord' },
+        { title: 'Cấu hình domain provider', value: 'domains' },
         { separator: 'TRỞ VỀ' },
-        { title: chalk.gray('🔙 Back to Home'), value: 'back' }
+        { title: chalk.gray('Quay lại Home'), value: 'back' }
       ]
     })
 
@@ -57,8 +66,8 @@ async function showSettingsMenu() {
       const { newProvider } = await prompts({
         type: 'select',
         name: 'newProvider',
-        message: 'Select Default Provider',
-        choices: Object.keys(providers).map((name, idx) => ({ title: `[${idx + 1}] ${name}`, value: name }))
+        message: 'Chọn provider mặc định',
+        choices: Object.keys(providers).map((name) => ({ title: name, value: name }))
       })
       if (newProvider) saveSettings({ defaultProvider: newProvider })
     }
@@ -67,8 +76,8 @@ async function showSettingsMenu() {
       const { newQuality } = await prompts({
         type: 'select',
         name: 'newQuality',
-        message: 'Select Default Quality',
-        choices: ['1080p', '720p', '480p', 'auto'].map((q, idx) => ({ title: `[${idx + 1}] ${q}`, value: q }))
+        message: 'Chọn chất lượng mặc định',
+        choices: ['1080p', '720p', '480p', 'auto'].map((q) => ({ title: q, value: q }))
       })
       if (newQuality) saveSettings({ defaultQuality: newQuality })
     }
@@ -83,14 +92,10 @@ async function showSettingsMenu() {
       toggleDiscordPresence(nextVal)
     }
 
-    if (action === 'devmode') {
-      saveSettings({ developerMode: !settings.developerMode })
-    }
-
     if (action === 'domains') {
       while (true) {
         clearScreen()
-        printBanner('Provider Domains', 'Set custom domains to bypass blocks')
+        printBanner('Domain provider', 'Đổi domain khi provider bị chặn hoặc đổi địa chỉ')
 
         const currentDomains = loadSettings().providerDomains || {}
 
@@ -100,18 +105,18 @@ async function showSettingsMenu() {
           const isCustom = !!currentDomains[name]
 
           return {
-            title: `[${idx + 1}] ${chalk.bold(name)}: ${isCustom ? chalk.green(currentDomain) : chalk.gray(currentDomain)}`,
+            title: `${chalk.bold(name)}: ${isCustom ? chalk.green(currentDomain) : chalk.gray(currentDomain)}`,
             value: name
           }
         })
 
-        domainChoices.push({ title: chalk.red('Reset All to Default'), value: 'reset' } as any)
-        domainChoices.push({ title: chalk.gray('Back to Settings'), value: 'back' } as any)
+        domainChoices.push({ title: chalk.red('Đặt lại tất cả domain mặc định'), value: 'reset' } as any)
+        domainChoices.push({ title: chalk.gray('Quay lại Cài đặt'), value: 'back' } as any)
 
         const { selectedProvider } = await prompts({
           type: 'select',
           name: 'selectedProvider',
-          message: 'Select a provider to configure (Press Esc to go back)',
+          message: 'Chọn provider cần cấu hình (Esc: quay lại)',
           choices: domainChoices
         })
 
@@ -119,7 +124,7 @@ async function showSettingsMenu() {
 
         if (selectedProvider === 'reset') {
           saveSettings({ providerDomains: {} })
-          console.log(chalk.green('All domains reset to default.'))
+          printSuccess('Đã đặt lại tất cả domain về mặc định.')
           await sleep(1000)
           continue
         }
@@ -127,7 +132,7 @@ async function showSettingsMenu() {
         const { newDomain } = await prompts({
           type: 'text',
           name: 'newDomain',
-          message: `Enter new domain for ${selectedProvider} (e.g. animevietsub.tv) - Leave empty to reset:`,
+          message: `Nhập domain mới cho ${selectedProvider} (ví dụ animevietsub.tv). Để trống để đặt lại:`,
           initial: currentDomains[selectedProvider] || ''
         })
 
@@ -149,12 +154,12 @@ async function showHistoryMenu() {
   setBrowsingPresence('Đang xem Lịch Sử', undefined, 'Lịch sử Toàn cục')
   while (true) {
     clearScreen()
-    printBanner('Continue Watching', 'Resume from where you left off')
+    printBanner('Tiếp tục xem', 'Mở lại bộ phim bạn xem gần đây')
 
     const history = loadHistory()
 
     if (history.length === 0) {
-      console.log(chalk.yellow('Your history is empty.'))
+      printEmpty('Lịch sử xem đang trống.')
       await sleep(2000)
       break
     }
@@ -162,19 +167,19 @@ async function showHistoryMenu() {
     const choices: any[] = [{ separator: 'LỊCH SỬ LOCAL' }]
     history.forEach((item, index) => {
       choices.push({
-        title: `[${index + 1}] ${chalk.magenta(item.provider)} | ${chalk.bold.white(item.animeTitle)} - ${chalk.cyan(item.episodeTitle)}`,
-        description: `Watched on: ${new Date(item.timestamp).toLocaleString()}`,
+        title: `${chalk.magenta(item.provider)} | ${chalk.bold.white(item.animeTitle)} - ${chalk.cyan(item.episodeTitle)}`,
+        description: `Đã xem: ${new Date(item.timestamp).toLocaleString()}`,
         value: index
       })
     })
 
-    choices.push({ title: chalk.red('Clear History'), description: '', value: -2 as any })
-    choices.push({ title: chalk.gray('Back to Home'), description: '', value: -1 as any })
+    choices.push({ title: chalk.red('Xóa lịch sử'), description: '', value: -2 as any })
+    choices.push({ title: chalk.gray('Quay lại Home'), description: '', value: -1 as any })
 
     const { selectedIndex } = await prompts({
       type: 'select',
       name: 'selectedIndex',
-      message: 'Select an episode to resume (Press Esc to go back)',
+      message: 'Chọn tập muốn xem tiếp (Esc: quay lại)',
       choices
     })
 
@@ -184,11 +189,11 @@ async function showHistoryMenu() {
       const { confirm } = await prompts({
         type: 'confirm',
         name: 'confirm',
-        message: 'Are you sure you want to clear your history?'
+        message: 'Bạn có chắc muốn xóa toàn bộ lịch sử?'
       })
       if (confirm) {
         clearHistory()
-        console.log(chalk.green('History cleared.'))
+        printSuccess('Đã xóa lịch sử.')
         await sleep(1000)
       }
       continue
@@ -205,23 +210,18 @@ async function showAnimeList(providerName: string, title: string, list: AnimeSea
     clearScreen()
     printBanner(`Provider: ${providerName.toUpperCase()}`, title.toUpperCase())
 
-    // Fix for prompts Windows bug: Flush any leftover escape sequences or buffered keys 
-    // that might corrupt the next prompt's raw mode and cause the ^[[B bug.
-    if (process.stdin.isTTY) {
-      process.stdin.resume()
-      while (process.stdin.read() !== null) { }
-    }
+    flushStdin()
 
     const { animeId } = await prompts({
       type: 'select',
       name: 'animeId',
-      message: 'Select an Anime (Press Esc to go back)',
+      message: 'Chọn anime (Esc: quay lại)',
       choices: list.map((anime, idx) => {
         const desc = anime.status || anime.year?.toString() || ''
         const cleanTitle = anime.title.replace(/\r?\n|\r/g, ' ').trim()
         const cleanDesc = desc.replace(/\r?\n|\r/g, ' ').trim()
         return {
-          title: `[${idx + 1}] ${cleanTitle}${cleanDesc ? ` - ${cleanDesc}` : ''}`,
+          title: `${chalk.bold(String(idx + 1).padStart(2))}. ${cleanTitle}${cleanDesc ? chalk.gray(` - ${cleanDesc}`) : ''}`,
           value: anime.id
         }
       })
@@ -238,7 +238,7 @@ async function openAnimeMenu(providerName: string, animeId: string) {
   const provider = getProvider(providerName)
 
   // Fetch details & episodes
-  const epsSpinner = ora('Fetching details and episodes...').start()
+  const epsSpinner = ora('Đang tải thông tin phim và danh sách tập...').start()
   let episodes = []
   let selectedAnime: AnimeDetail | null = null
 
@@ -247,7 +247,7 @@ async function openAnimeMenu(providerName: string, animeId: string) {
     epsSpinner.stop()
   } catch (e) {
     epsSpinner.stop()
-    console.error(chalk.red('\nFailed to fetch episodes:'), e)
+    console.error(chalk.red('\nKhông tải được danh sách tập:'), e)
     await sleep(2000)
     return
   }
@@ -262,7 +262,7 @@ async function openAnimeMenu(providerName: string, animeId: string) {
   }
 
   if (!episodes || episodes.length === 0) {
-    console.log(chalk.yellow('\nNo episodes found.'))
+    printEmpty('\nKhông tìm thấy tập phim nào.')
     await sleep(2000)
     return
   }
@@ -283,16 +283,13 @@ async function openAnimeMenu(providerName: string, animeId: string) {
     printBanner(`Provider: ${providerName.toUpperCase()}`, selectedAnime ? selectedAnime.title : animeId)
     if (selectedAnime) drawAnimeCard(selectedAnime)
 
-    if (process.stdin.isTTY) {
-      process.stdin.resume()
-      while (process.stdin.read() !== null) { }
-    }
+    flushStdin()
 
     const episodeChoices: any[] = [{ separator: 'DANH SÁCH TẬP' }]
     episodes.forEach((ep, idx) => {
       const cleanTitle = (ep.title || `Episode ${ep.number}`).replace(/\r?\n|\r/g, ' ').trim()
       episodeChoices.push({
-        title: `[${idx + 1}] ▶️ ${cleanTitle}`,
+        title: `${chalk.bold(String(idx + 1).padStart(2))}. ${cleanTitle}`,
         value: ep
       })
     })
@@ -300,7 +297,7 @@ async function openAnimeMenu(providerName: string, animeId: string) {
     const { episode } = await prompts({
       type: 'select',
       name: 'episode',
-      message: 'Select an Episode (Esc: Thoát)',
+      message: 'Chọn tập phim (Esc: quay lại)',
       choices: episodeChoices
     })
 
@@ -308,11 +305,14 @@ async function openAnimeMenu(providerName: string, animeId: string) {
 
     while (true) {
       clearScreen()
-      printBanner(`Provider: ${providerName.toUpperCase()}`, selectedAnime ? selectedAnime.title : animeId)
-      if (selectedAnime) drawAnimeCard(selectedAnime)
-      console.log(chalk.blue(`▶️ Selected: `) + chalk.bold.white(episode.title || `Episode ${episode.number}`) + '\n')
+      printBanner('Chọn server', selectedAnime ? selectedAnime.title : animeId)
+      if (selectedAnime) {
+        drawAnimeInfoCard(selectedAnime, episode.title || `Episode ${episode.number}`)
+      } else {
+        console.log(`${chalk.blue('Tập:')} ${chalk.bold.white(episode.title || `Episode ${episode.number}`)}\n`)
+      }
 
-      const serversSpinner = ora('Fetching video servers...').start()
+      const serversSpinner = ora('Đang tải server phát...').start()
       let servers = []
       try {
         const episodeIdentifier = (episode as any).href || episode.id
@@ -320,13 +320,13 @@ async function openAnimeMenu(providerName: string, animeId: string) {
         serversSpinner.stop()
       } catch (e) {
         serversSpinner.stop()
-        console.error(chalk.red('\nFailed to fetch servers:'), e)
+        console.error(chalk.red('\nKhông tải được server phát:'), e)
         await sleep(2000)
         break
       }
 
       if (!servers || servers.length === 0) {
-        console.log(chalk.red('\nNo video servers found for this episode.'))
+        printError('\nKhông tìm thấy server phát cho tập này.')
         await sleep(2000)
         break
       }
@@ -334,34 +334,34 @@ async function openAnimeMenu(providerName: string, animeId: string) {
       const { server } = await prompts({
         type: 'select',
         name: 'server',
-        message: 'Select a Server (Press Esc to go back)',
+        message: 'Chọn server phát (Esc: quay lại)',
         choices: servers.map((s, idx) => ({
-          title: `[${idx + 1}] ${s.name} [${s.quality || 'Auto'}] (${s.type})`,
+          title: `${chalk.bold(String(idx + 1).padStart(2))}. ${s.name} ${chalk.gray(`[${s.quality || 'Auto'}] (${s.type || 'stream'})`)}`,
           value: s
         }))
       })
 
       if (!server) break
 
-      const streamSpinner = ora('Extracting stream URL...').start()
+      const streamSpinner = ora('Đang lấy stream URL...').start()
       let streamInfo = null
       try {
         streamInfo = await provider.extractStreamUrl(server)
         streamSpinner.stop()
       } catch (e) {
         streamSpinner.stop()
-        console.error(chalk.red('\nFailed to extract stream:'), e)
+        console.error(chalk.red('\nKhông lấy được stream:'), e)
         await sleep(2000)
         continue
       }
 
       if (!streamInfo || !streamInfo.url) {
-        console.log(chalk.red('\nFailed to extract stream URL.'))
+        printError('\nKhông lấy được stream URL.')
         await sleep(2000)
         continue
       }
 
-      console.log(chalk.green(`\n✅ Ready to play! Opening Player...`))
+      printSuccess('\nSẵn sàng phát. Đang mở player...')
 
       // Save history
       saveHistoryEntry({
@@ -376,14 +376,14 @@ async function openAnimeMenu(providerName: string, animeId: string) {
         setWatchingPresence(selectedAnime.title, episode.title || `Episode ${episode.number}`, providerName)
         await launchPlayer(streamInfo)
         setBrowsingPresence(`Đang xem thông tin: ${selectedAnime.title}`, providerName, 'Thông tin Phim')
-        console.log(chalk.green('\nPlayer closed.'))
+        printSuccess('\nTrình phát đã đóng.')
         await sleep(500)
       } catch (e) {
-        console.error(chalk.red('\nPlayer error:'), e)
+        console.error(chalk.red('\nLỗi player:'), e)
         await sleep(2000)
       }
 
-      break // Go back to Select Episode!
+      break // Quay lại danh sách tập.
     }
   }
 }
@@ -392,7 +392,7 @@ async function openAnimeMenu(providerName: string, animeId: string) {
 async function showUserDataList(title: string, items: UserDataItem[], providerName: string): Promise<void> {
   setBrowsingPresence(`Đang xem ${title}`, providerName, title)
   if (items.length === 0) {
-    console.log(chalk.yellow('\n  (Danh sách trống)'))
+    printEmpty('\nDanh sách đang trống.')
     await sleep(1500)
     return
   }
@@ -423,7 +423,7 @@ async function showUserDataList(title: string, items: UserDataItem[], providerNa
     const { animeId } = await prompts({
       type: 'select',
       name: 'animeId',
-      message: 'Chọn anime để xem (Esc để quay lại)',
+      message: 'Chọn anime để xem (Esc: quay lại)',
       choices
     })
 
@@ -444,10 +444,10 @@ async function showProviderAccountMenu(provider: 'animevietsub' | 'anime47'): Pr
     clearScreen()
     const status = getAuthStatus(provider)
     const loginLabel = status.loggedIn
-      ? chalk.green(`✅ ${status.userDisplayName || 'Đã đăng nhập'} (${status.cookieCount} cookies)`)
-      : chalk.red('❌ Chưa đăng nhập')
+      ? chalk.green(`${status.userDisplayName || 'Đã đăng nhập'} (${status.cookieCount} cookies)`)
+      : chalk.red('Chưa đăng nhập')
 
-    printBanner(`${label} — Account`, loginLabel)
+    printBanner(`${label} — Tài khoản`, loginLabel)
 
     const choices = status.loggedIn
       ? [
@@ -463,7 +463,7 @@ async function showProviderAccountMenu(provider: 'animevietsub' | 'anime47'): Pr
         { title: chalk.gray('Quay lại'), value: 'back' }
       ]
       : [
-        { title: chalk.cyan('🔑 Đăng nhập'), value: 'login' },
+        { title: chalk.cyan('Đăng nhập'), value: 'login' },
         { title: chalk.gray('Quay lại'), value: 'back' }
       ]
 
@@ -475,10 +475,10 @@ async function showProviderAccountMenu(provider: 'animevietsub' | 'anime47'): Pr
         const result = provider === 'animevietsub'
           ? await loginAnimeVietsubInteractive()
           : await loginAnime47Interactive()
-        console.log(chalk.green(`\n✅ Đăng nhập thành công!`))
+        printSuccess('\nĐăng nhập thành công!')
         if (result.userDisplayName) console.log(chalk.cyan(`   Xin chào, ${result.userDisplayName}!`))
       } catch (e) {
-        console.error(chalk.red(`\n❌ Đăng nhập thất bại:`), e)
+        console.error(chalk.red('\nĐăng nhập thất bại:'), e)
       }
       await sleep(2000)
       continue
@@ -486,7 +486,7 @@ async function showProviderAccountMenu(provider: 'animevietsub' | 'anime47'): Pr
 
     if (action === 'logout') {
       logoutProvider(provider)
-      console.log(chalk.yellow(`\n👋 Đã đăng xuất khỏi ${label}.`))
+      console.log(chalk.yellow(`\nĐã đăng xuất khỏi ${label}.`))
       await sleep(1500)
       break
     }
@@ -505,7 +505,7 @@ async function showProviderAccountMenu(provider: 'animevietsub' | 'anime47'): Pr
           spinner.stop()
           const titleMap = { favorites: 'Hộp phim / Yêu thích', history: 'Lịch sử xem' }
           if (!res.success) {
-            console.log(chalk.red(`\n❌ ${res.error}`))
+            printError(`\n${res.error}`)
             await sleep(2000)
           } else {
             await showUserDataList(`${titleMap[listType]} — AnimeVietsub`, res.items, provider)
@@ -527,7 +527,7 @@ async function showProviderAccountMenu(provider: 'animevietsub' | 'anime47'): Pr
             watching: 'Đang xem', completed: 'Hoàn thành', plan_to_watch: 'Dự định xem'
           }
           if (!res.success) {
-            console.log(chalk.red(`\n❌ ${res.error}`))
+            printError(`\n${res.error}`)
             await sleep(2000)
           } else {
             await showUserDataList(`${titleMap[action] || action} — Anime47`, res.items, provider)
@@ -536,7 +536,7 @@ async function showProviderAccountMenu(provider: 'animevietsub' | 'anime47'): Pr
       }
     } catch (e) {
       spinner.stop()
-      console.error(chalk.red(`\n❌ Lỗi:`), e)
+      console.error(chalk.red('\nLỗi:'), e)
       await sleep(2000)
     }
   }
@@ -549,13 +549,13 @@ async function showAccountMenu(): Promise<void> {
     const a47Status = getAuthStatus('anime47')
 
     const avsLabel = avsStatus.loggedIn
-      ? chalk.green(`✅ ${avsStatus.userDisplayName || 'Đã đăng nhập'}`)
-      : chalk.red('❌ Chưa đăng nhập')
+      ? chalk.green(avsStatus.userDisplayName || 'Đã đăng nhập')
+      : chalk.red('Chưa đăng nhập')
     const a47Label = a47Status.loggedIn
-      ? chalk.green(`✅ ${a47Status.userDisplayName || 'Đã đăng nhập'}`)
-      : chalk.red('❌ Chưa đăng nhập')
+      ? chalk.green(a47Status.userDisplayName || 'Đã đăng nhập')
+      : chalk.red('Chưa đăng nhập')
 
-    printBanner('👤 Account', 'Quản lý tài khoản theo nhà cung cấp')
+    printBanner('Tài khoản', 'Quản lý đăng nhập theo từng provider')
 
     const { provider } = await prompts({
       type: 'select',
@@ -635,15 +635,16 @@ async function main() {
       ? chalk.green(`${authStatus.userDisplayName || 'Đã đăng nhập'} (${authStatus.cookieCount || 0} cookies)`)
       : chalk.red('Chưa đăng nhập')
 
-    printBanner(`Provider: ${currentProviderName.toUpperCase()}`, 'Home Dashboard')
-    console.log(chalk.cyan('NekoStream Dashboard | Hôm nay xem gì?'))
-    console.log(`Account: ${usernameDisplay}\n`)
+    printBanner(`Provider: ${currentProviderName.toUpperCase()}`, 'Trang chủ')
+    console.log(chalk.cyan('NekoStream Dashboard'))
+    console.log(`Tài khoản: ${usernameDisplay}`)
+    console.log(`Provider: ${chalk.green(currentProviderName)}\n`)
 
     const dynamicChoices: any[] = [
       { separator: 'KHÁM PHÁ' },
-      { title: 'Search Anime', value: 'search' },
-      { title: 'Trending Now', value: 'trending' },
-      { title: 'Recently Added', value: 'latest' }
+      { title: 'Tìm anime', value: 'search', description: 'Tìm theo tên phim' },
+      { title: 'Đang thịnh hành', value: 'trending', description: 'Danh sách nổi bật từ provider' },
+      { title: 'Mới cập nhật', value: 'latest', description: 'Các tập/phim vừa được cập nhật' }
     ]
 
     const usernameStr = authStatus.loggedIn ? (authStatus.userDisplayName || 'MEMBER') : 'KHÁCH'
@@ -687,14 +688,14 @@ async function main() {
     const { action } = await prompts({
       type: 'select',
       name: 'action',
-      message: 'Home Dashboard (Press Esc to Exit)',
+      message: 'Trang chủ',
       choices: dynamicChoices
     })
 
     if (!action || action === 'exit') {
       clearScreen()
       clearDiscordPresence()
-      console.log(chalk.magenta('\nThanks for using NekoStream CLI! 🎬\n'))
+      console.log(chalk.magenta('\nCảm ơn bạn đã dùng NekoStream CLI.\n'))
       process.exit(0)
     }
 
@@ -717,7 +718,7 @@ async function main() {
 
     if (action === 'logout') {
       logoutProvider(currentProviderName as any)
-      console.log(chalk.yellow(`\n👋 Đã đăng xuất.`))
+      console.log(chalk.yellow('\nĐã đăng xuất.'))
       await sleep(1500)
       continue
     }
@@ -735,7 +736,7 @@ async function main() {
             const res = await fetchAllAnimeVietsubList(listType as 'favorites' | 'history')
             spinner.stop()
             if (!res.success) {
-              console.log(chalk.red(`\n❌ ${res.error}`))
+              printError(`\n${res.error}`)
               await sleep(2000)
             } else {
               await showUserDataList(listType === 'history' ? 'Lịch sử' : 'Hộp phim', res.items, currentProviderName)
@@ -753,7 +754,7 @@ async function main() {
             const res = await fetchAllAnime47List(listType as any)
             spinner.stop()
             if (!res.success) {
-              console.log(chalk.red(`\n❌ ${res.error}`))
+              printError(`\n${res.error}`)
               await sleep(2000)
             } else {
               const titleMap: any = { favorites: 'Yêu thích', history: 'Lịch sử xem', watching: 'Đang xem', completed: 'Hoàn thành', plan_to_watch: 'Dự định xem' }
@@ -772,43 +773,43 @@ async function main() {
       const { keyword } = await prompts({
         type: 'text',
         name: 'keyword',
-        message: 'Enter anime name to search (Press Esc to go back)'
+        message: 'Nhập tên anime cần tìm (Esc: quay lại)'
       })
       if (!keyword) continue
 
-      const searchSpinner = ora(`Searching for "${keyword}" on ${currentProviderName}...`).start()
+      const searchSpinner = ora(`Đang tìm "${keyword}" trên ${currentProviderName}...`).start()
       try {
         const results = await provider.search(keyword)
         searchSpinner.stop()
         if (!results || results.length === 0) {
-          console.log(chalk.yellow(`\nNo results found.`))
+          printEmpty('\nKhông tìm thấy kết quả phù hợp.')
           await sleep(2000)
           continue
         }
         setBrowsingPresence(`Đang Tìm kiếm: ${keyword}`, currentProviderName, 'Tìm kiếm')
-        await showAnimeList(currentProviderName, `Search Results: ${keyword}`, results)
+        await showAnimeList(currentProviderName, `Kết quả tìm kiếm: ${keyword}`, results)
       } catch (e) {
         searchSpinner.stop()
-        console.error(chalk.red('\nSearch failed:'), e)
+        console.error(chalk.red('\nTìm kiếm thất bại:'), e)
         await sleep(2000)
       }
     }
 
     if (action === 'trending' || action === 'latest') {
-      const spinner = ora(`Fetching ${action} anime...`).start()
+      const spinner = ora(`Đang tải danh sách ${action === 'trending' ? 'thịnh hành' : 'mới cập nhật'}...`).start()
       try {
         const results = await provider.getHomeCards(action)
         spinner.stop()
         if (!results || results.length === 0) {
-          console.log(chalk.yellow(`\nNo ${action} anime found on this provider.`))
+          printEmpty(`\nProvider này chưa có danh sách ${action === 'trending' ? 'thịnh hành' : 'mới cập nhật'}.`)
           await sleep(2000)
           continue
         }
         setBrowsingPresence(`Đang Xem ${action === 'trending' ? 'Xu hướng' : 'Cập nhật gần đây'}`, currentProviderName, action === 'trending' ? 'Xu hướng' : 'Mới cập nhật')
-        await showAnimeList(currentProviderName, action === 'trending' ? '🔥 Trending Now' : '🆕 Recently Added', results)
+        await showAnimeList(currentProviderName, action === 'trending' ? 'Đang thịnh hành' : 'Mới cập nhật', results)
       } catch (e) {
         spinner.stop()
-        console.error(chalk.red(`\nFailed to fetch ${action} anime:`), e)
+        console.error(chalk.red(`\nKhông tải được danh sách ${action}:`), e)
         await sleep(2000)
       }
     }
@@ -817,7 +818,7 @@ async function main() {
       await showHistoryMenu()
     }
 
-    // Account logic has been moved to main menu
+    // Account actions are handled directly from the main menu.
 
     if (action === 'settings') {
       await showSettingsMenu()
@@ -830,7 +831,7 @@ async function main() {
       const { newProvider } = await prompts({
         type: 'select',
         name: 'newProvider',
-        message: 'Select an Anime Provider',
+        message: 'Chọn provider',
         choices: Object.keys(providers).map(name => ({ title: name, value: name }))
       })
       if (newProvider) {
@@ -844,10 +845,10 @@ async function main() {
 process.on('SIGINT', () => {
   clearScreen()
   clearDiscordPresence()
-  console.log(chalk.magenta('\nThanks for using NekoStream CLI! 🎬\n'))
+  console.log(chalk.magenta('\nCảm ơn bạn đã dùng NekoStream CLI.\n'))
   process.exit(0)
 })
 
 main().catch(e => {
-  console.error(chalk.red('Fatal Error:'), e)
+  console.error(chalk.red('Lỗi nghiêm trọng:'), e)
 })

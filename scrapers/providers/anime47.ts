@@ -2,6 +2,7 @@ import * as cheerio from 'cheerio'
 import { BaseScraper, AnimeSearchResult, AnimeDetail, Episode, VideoServer, StreamInfo } from '../base'
 import { fetchM3U8 } from '../interceptor'
 import { enrichWithAniList } from '../anilist'
+import { externalApi } from '../external-api'
 import { getProviderCookieHeader, getProviderToken, loadAuthSession } from '../../storage'
 import { fetchA47Page, interceptA47StreamUrl } from '../auth-service'
 
@@ -578,14 +579,26 @@ export class Anime47Provider extends BaseScraper {
       
       const title = schemaData.name || stateData.title || $('h1, .movie-title, .title').first().text().trim() || id
       const titles = Array.isArray(stateData.titles) ? stateData.titles.map((v: any) => String(v?.title || '')).filter(Boolean) : []
-      const genres = schemaData.genre || (Array.isArray(stateData.genres) ? stateData.genres.map((g: any) => String(g?.name || '')).filter(Boolean) : [])
+      const genres: string[] = []
+      const addGenre = (raw?: string) => {
+        const genre = this.decodeHtml(String(raw || '').trim())
+        if (genre && genre.length > 1 && !genres.includes(genre)) genres.push(genre)
+      }
+      if (Array.isArray(schemaData.genre)) schemaData.genre.forEach((g: any) => addGenre(String(g)))
+      else if (typeof schemaData.genre === 'string') schemaData.genre.split(/[,/|;]+/).forEach(addGenre)
+      if (Array.isArray(stateData.genres)) {
+        stateData.genres.forEach((g: any) => addGenre(String(g?.name || g?.title || g || '')))
+      }
+      $('a[href*="/the-loai/"], a[href*="/genre/"], a[href*="/genres/"]').each((_, el) => {
+        addGenre($(el).text().trim() || $(el).attr('title'))
+      })
       
       const rawPoster = String(schemaData.image || stateData.poster || stateData.images?.poster || $('img[src*="/poster/"], .movie-l-img img, .thumbnail img').attr('src') || '')
       const rawCover = String(stateData.cover || '')
       const cover = rawCover.includes('via.placeholder.com') ? rawPoster : rawCover || rawPoster
 
       // Extract description from HTML or Schema
-      const description = schemaData.description || stateData.description || $('.text-caption, .text-body2, .description, .movie-dd').first().text().trim()
+      let description = schemaData.description || stateData.description || $('.text-caption, .text-body2, .description, .movie-dd').first().text().trim()
 
       // Extract year from Schema datePublished or HTML badges
       let year = Number(stateData.year || 0)
@@ -608,6 +621,21 @@ export class Anime47Provider extends BaseScraper {
           if (m) episodeCount = Number(m[1])
         })
       }
+
+      let enhancedCover: string | undefined
+      let enhancedBanner: string | undefined
+      try {
+        const anilistMeta = await externalApi.getEnhancedMetadata(title, titles[0])
+        if (anilistMeta?.cover) enhancedCover = anilistMeta.cover
+        if (anilistMeta?.banner) enhancedBanner = anilistMeta.banner
+        if ((!description || String(description).endsWith('...') || String(description).length < 80) && anilistMeta?.synopsis) {
+          description = anilistMeta.synopsis
+        }
+        if (genres.length === 0 && anilistMeta?.genres?.length) {
+          anilistMeta.genres.forEach(addGenre)
+        }
+        if (!episodeCount && anilistMeta?.episodes) episodeCount = anilistMeta.episodes
+      } catch { /* non-fatal */ }
 
       // Extract related anime from HTML
       const relatedAnime: Array<{ id: string; title: string; thumbnail?: string; href?: string }> = []
@@ -653,7 +681,8 @@ export class Anime47Provider extends BaseScraper {
         title: this.decodeHtml(title),
         titleAlt: titles.find((v: string) => v && v !== title),
         thumbnail: this.absolutizeUrl(rawPoster || cover),
-        cover: this.absolutizeUrl(cover || rawPoster),
+        cover: enhancedCover || this.absolutizeUrl(cover || rawPoster),
+        banner: enhancedBanner,
         description: description,
         genres,
         status: String(stateData.status || '').trim() || undefined,
