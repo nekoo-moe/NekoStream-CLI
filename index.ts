@@ -6,7 +6,7 @@ import chalk from 'chalk'
 import ora from 'ora'
 import { providers, getProvider } from './providers'
 import { launchPlayer } from './player'
-import { clearScreen, printBanner, drawAnimeCard, drawAnimeInfoCard, printEmpty, printError, printSuccess } from './ui'
+import { clearScreen, printBanner, drawAnimeCard, drawAnimeInfoCard, printEmpty, printError, printStatusStrip, printSuccess } from './ui'
 import { loadSettings, saveSettings, loadHistory, saveHistoryEntry, clearHistory } from './storage'
 import { initDiscord, toggleDiscordPresence, setBrowsingPresence, setWatchingPresence, clearDiscordPresence } from './discord'
 import type { AnimeDetail, AnimeSearchResult } from './scrapers/base'
@@ -21,6 +21,8 @@ import {
   fetchAnime47Notifications,
   type UserDataItem
 } from './scrapers/auth-service'
+
+const NPM_PACKAGE_NAME = 'nekostream'
 
 async function sleep(ms: number) {
   return new Promise(resolve => setTimeout(resolve, ms))
@@ -285,7 +287,7 @@ async function openAnimeMenu(providerName: string, animeId: string) {
 
     flushStdin()
 
-    const episodeChoices: any[] = [{ separator: 'DANH SÁCH TẬP' }]
+    const episodeChoices: any[] = []
     episodes.forEach((ep, idx) => {
       const cleanTitle = (ep.title || `Episode ${ep.number}`).replace(/\r?\n|\r/g, ' ').trim()
       episodeChoices.push({
@@ -295,7 +297,7 @@ async function openAnimeMenu(providerName: string, animeId: string) {
     })
 
     const { episode } = await prompts({
-      type: 'select',
+      type: 'grid',
       name: 'episode',
       message: 'Chọn tập phim (Esc: quay lại)',
       choices: episodeChoices
@@ -580,7 +582,7 @@ async function checkUpdate() {
     const pkg = JSON.parse(fs.readFileSync(path.join(basePath, 'package.json'), 'utf-8'))
     const currentVersion = pkg.version
 
-    const res = await fetch('https://registry.npmjs.org/nekostream-cli/latest', { signal: AbortSignal.timeout(2000) })
+    const res = await fetch(`https://registry.npmjs.org/${NPM_PACKAGE_NAME}/latest`, { signal: AbortSignal.timeout(2000) })
     const data = await res.json()
     const latestVersion = data.version
 
@@ -601,16 +603,17 @@ async function checkUpdate() {
       })
 
       if (update) {
-        const spinner = ora('Đang cập nhật (npm i -g nekostream-cli@latest)...').start()
+        const installCommand = `npm i -g ${NPM_PACKAGE_NAME}@latest`
+        const spinner = ora(`Đang cập nhật (${installCommand})...`).start()
         try {
-          execSync('npm i -g nekostream-cli@latest', { stdio: 'ignore' })
+          execSync(installCommand, { stdio: 'ignore' })
           spinner.succeed(chalk.green('Đã cập nhật thành công! Vui lòng chạy lại lệnh để sử dụng bản mới.'))
         } catch (e) {
-          spinner.fail(chalk.red('Cập nhật thất bại. Vui lòng chạy thủ công: npm i -g nekostream-cli@latest'))
+          spinner.fail(chalk.red(`Cập nhật thất bại. Vui lòng chạy thủ công: ${installCommand}`))
         }
         process.exit(0)
       } else {
-        console.log(chalk.red('\nVui lòng chạy `npm i -g nekostream-cli@latest` để cập nhật thủ công.'))
+        console.log(chalk.red(`\nVui lòng chạy \`npm i -g ${NPM_PACKAGE_NAME}@latest\` để cập nhật thủ công.`))
         process.exit(0)
       }
     }
@@ -636,9 +639,10 @@ async function main() {
       : chalk.red('Chưa đăng nhập')
 
     printBanner(`Provider: ${currentProviderName.toUpperCase()}`, 'Trang chủ')
-    console.log(chalk.cyan('NekoStream Dashboard'))
-    console.log(`Tài khoản: ${usernameDisplay}`)
-    console.log(`Provider: ${chalk.green(currentProviderName)}\n`)
+    printStatusStrip([
+      { label: 'Tài khoản', value: usernameDisplay },
+      { label: 'Provider', value: chalk.green(currentProviderName) }
+    ])
 
     const dynamicChoices: any[] = [
       { separator: 'KHÁM PHÁ' },

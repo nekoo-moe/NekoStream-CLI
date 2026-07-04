@@ -13,13 +13,13 @@ let currentEpisode: string | undefined
 let isWatching = false
 
 const COMMON_BUTTONS = [
-  { label: 'NekoStreamCLI', url: 'https://www.npmjs.com/package/nekostream-cli' },
+  { label: 'NekoStream', url: 'https://www.npmjs.com/package/nekostream' },
   { label: 'Tham gia Discord', url: 'https://discord.gg/Y2kq2y26pZ' }
 ]
 
 const imageCache: Record<string, string> = {}
 
-async function fetchAnimeImage(title: string): Promise<string> {
+async function fetchAnimeImage(title: string): Promise<string | undefined> {
   const cleanTitle = title.replace(/(vietsub|thuyết minh|tập.*|phần.*)/gi, '').trim()
   if (imageCache[cleanTitle]) return imageCache[cleanTitle]
   
@@ -37,7 +37,7 @@ async function fetchAnimeImage(title: string): Promise<string> {
     }
   } catch (e) {}
   
-  return 'https://cdnjs.cloudflare.com/ajax/libs/twemoji/15.1.0/72x72/1f4fa.png' // Fallback
+  return undefined
 }
 
 export async function initDiscord() {
@@ -92,14 +92,14 @@ export async function setBrowsingPresence(details?: string, provider?: string, f
   
   const stateStr = provider ? `${provider.toUpperCase()}${feature ? ` | ${feature}` : ''}` : (feature || 'NekoStream CLI')
   
-  const largeImageKey = animeTitle ? await fetchAnimeImage(animeTitle) : 'https://cdnjs.cloudflare.com/ajax/libs/twemoji/15.1.0/72x72/1f4fa.png'
+  const largeImageKey = animeTitle ? await fetchAnimeImage(animeTitle) : undefined
   const largeImageText = animeTitle || 'NekoStream'
 
   safeSetActivity({
     details: details || 'Đang lướt Menu Chính',
     state: stateStr,
     startTimestamp,
-    largeImageKey,
+    ...(largeImageKey ? { largeImageKey } : {}),
     largeImageText,
     instance: false,
     buttons: COMMON_BUTTONS
@@ -119,9 +119,8 @@ export async function setWatchingPresence(animeTitle: string, episodeName: strin
     details: `Đang xem: ${animeTitle}`,
     state: `${provider.toUpperCase()} | ${episodeName}`,
     startTimestamp,
-    largeImageKey,
+    ...(largeImageKey ? { largeImageKey } : {}),
     largeImageText: animeTitle,
-    smallImageKey: 'https://cdnjs.cloudflare.com/ajax/libs/twemoji/15.1.0/72x72/25b6.png',
     smallImageText: 'Playing',
     instance: false,
     buttons: COMMON_BUTTONS

@@ -1,16 +1,17 @@
 import chalk from 'chalk'
 
 export const palette = {
-  primary: '#5eead4',
-  accent: '#f472b6',
-  blue: '#60a5fa',
-  violet: '#a78bfa',
-  success: '#34d399',
-  warning: '#fbbf24',
-  danger: '#fb7185',
-  muted: '#94a3b8',
-  border: '#334155',
-  text: '#f8fafc'
+  primary: '#58a6ff',
+  accent: '#db61a2',
+  cyan: '#39c5cf',
+  green: '#3fb950',
+  yellow: '#d29922',
+  red: '#f85149',
+  text: '#f0f6fc',
+  muted: '#8b949e',
+  subtle: '#6e7681',
+  border: '#30363d',
+  borderActive: '#3b82f6'
 }
 
 export const uiText = {
@@ -18,14 +19,18 @@ export const uiText = {
   title: chalk.hex(palette.text).bold,
   subtitle: chalk.hex(palette.muted),
   section: chalk.hex(palette.accent).bold,
-  label: chalk.hex(palette.blue),
+  label: chalk.hex(palette.primary).bold,
   value: chalk.white,
+  quietValue: chalk.hex(palette.text),
   muted: chalk.hex(palette.muted),
-  success: chalk.hex(palette.success),
-  warning: chalk.hex(palette.warning),
-  danger: chalk.hex(palette.danger),
+  subtle: chalk.hex(palette.subtle),
+  success: chalk.hex(palette.green),
+  warning: chalk.hex(palette.yellow),
+  danger: chalk.hex(palette.red),
   border: chalk.hex(palette.border),
-  accent: chalk.hex(palette.accent)
+  activeBorder: chalk.hex(palette.borderActive),
+  accent: chalk.hex(palette.accent),
+  focus: chalk.hex(palette.cyan).bold
 }
 
 export const glyphs = {
@@ -37,7 +42,8 @@ export const glyphs = {
   vertical: '│',
   teeLeft: '├',
   teeRight: '┤',
-  dot: '•',
+  cross: '┼',
+  dot: '·',
   pointer: '›',
   back: '←',
   play: '▶',
