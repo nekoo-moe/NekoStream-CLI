@@ -33,8 +33,6 @@ Cập nhật lên bản mới nhất:
 npm install -g nekostream@latest
 ```
 
-Nếu npmjs.com chưa hiển thị version mới ngay sau khi publish, hãy kiểm tra bằng `npm view nekostream version`. Registry thường cập nhật trước, còn giao diện web npmjs có thể cache/chậm vài phút.
-
 ## Tính năng chính
 
 - Tìm anime, xem danh sách thịnh hành và danh sách mới cập nhật.
@@ -57,19 +55,13 @@ npm install
 Chạy bản development:
 
 ```bash
-npm run start
+npm start
 ```
 
 Build TypeScript:
 
 ```bash
 npm run build
-```
-
-Publish lên npm:
-
-```bash
-npm publish
 ```
 
 Trước khi publish, hãy đảm bảo `version` trong `package.json` và `package-lock.json` đã khớp nhau.

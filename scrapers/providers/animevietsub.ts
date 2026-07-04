@@ -28,8 +28,8 @@ import { extractVideoFromJS, fetchM3U8 } from '../interceptor'
 import { externalApi } from '../external-api'
 import { enrichWithAniList } from '../anilist'
 import { getProviderCookieHeader } from '../auth-service'
-import { loadAuthSession } from '../../storage'
-import { debugWarn } from '../../logger'
+import { loadAuthSession, loadSettings, saveSettings } from '../../storage'
+import { debugLog, debugWarn } from '../../logger'
 // Extended AnimeDetail with additional metadata
 export interface AnimeDetailExtended extends AnimeDetail {
   descriptionVi?: string
@@ -59,6 +59,13 @@ export interface AnimeDetailExtended extends AnimeDetail {
 export class AnimeVietsubProvider extends BaseScraper {
   name = 'AnimeVietsub'
   baseUrl = 'https://animevietsub.site'
+  private static readonly knownBaseUrls = [
+    'https://animevietsub.love',
+    'https://animevietsub.site',
+    'https://animevietsub.fan',
+    'https://animevietsub.bz',
+    'https://animevietsub.tv'
+  ]
 
   // Stable Chrome 124 profile to align with the player's webview user agent
   private stableProfile = {
@@ -67,6 +74,85 @@ export class AnimeVietsubProvider extends BaseScraper {
     secChUaMobile: '?0',
     secChUaPlatform: '"Windows"',
     acceptLanguage: 'vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7',
+  }
+
+  private normalizeBaseUrl(value: string): string {
+    const url = value.startsWith('http') ? value : `https://${value}`
+    return url.replace(/\/$/, '')
+  }
+
+  private isAnimeVietsubUrl(value: string): boolean {
+    try {
+      return new URL(value).hostname.toLowerCase().includes('animevietsub')
+    } catch {
+      return false
+    }
+  }
+
+  private rememberWorkingDomain(finalUrl: string, sourceUrl?: string): void {
+    if (!this.isAnimeVietsubUrl(finalUrl)) return
+
+    const finalBaseUrl = new URL(finalUrl).origin
+    const currentBaseUrl = this.normalizeBaseUrl(this.baseUrl)
+    if (finalBaseUrl === currentBaseUrl) return
+
+    this.baseUrl = finalBaseUrl
+    try {
+      const settings = loadSettings()
+      saveSettings({
+        providerDomains: {
+          ...(settings.providerDomains || {}),
+          animevietsub: finalBaseUrl
+        }
+      })
+      debugLog(`[AnimeVietsub] Domain updated: ${sourceUrl || currentBaseUrl} -> ${finalBaseUrl}`)
+    } catch (error) {
+      debugWarn('[AnimeVietsub] Could not save discovered domain:', error)
+    }
+  }
+
+  private getAlternateUrls(originalUrl: string): string[] {
+    let parsed: URL
+    try {
+      parsed = new URL(originalUrl)
+    } catch {
+      return []
+    }
+
+    const path = `${parsed.pathname}${parsed.search}`
+    const currentBaseUrl = this.normalizeBaseUrl(this.baseUrl)
+    const candidates = [
+      currentBaseUrl,
+      ...AnimeVietsubProvider.knownBaseUrls.map((url) => this.normalizeBaseUrl(url))
+    ]
+
+    return [...new Set(candidates)]
+      .filter((baseUrl) => baseUrl !== parsed.origin)
+      .map((baseUrl) => `${baseUrl}${path}`)
+  }
+
+  private async fetchHtmlFromAlternateDomains(
+    originalUrl: string,
+    options: { timeoutMs?: number; retries?: number; useBrowserFallback?: boolean; allowDomainFallback?: boolean }
+  ): Promise<string | null> {
+    if (!this.isAnimeVietsubUrl(originalUrl)) return null
+
+    for (const alternateUrl of this.getAlternateUrls(originalUrl)) {
+      try {
+        debugWarn(`[AnimeVietsub] Trying alternate domain: ${alternateUrl}`)
+        const html = await this.fetchHtml(alternateUrl, {
+          ...options,
+          retries: 0,
+          allowDomainFallback: false
+        })
+        this.rememberWorkingDomain(alternateUrl, originalUrl)
+        return html
+      } catch (error) {
+        debugWarn(`[AnimeVietsub] Alternate domain failed: ${alternateUrl}`, error)
+      }
+    }
+
+    return null
   }
 
   // User endpoints omitted in standalone CLI
@@ -147,11 +233,12 @@ export class AnimeVietsubProvider extends BaseScraper {
    */
   private async fetchHtml(
     url: string,
-    options: { timeoutMs?: number; retries?: number; useBrowserFallback?: boolean } = {}
+    options: { timeoutMs?: number; retries?: number; useBrowserFallback?: boolean; allowDomainFallback?: boolean } = {}
   ): Promise<string> {
     const timeoutMs = options.timeoutMs ?? 20000
     const retries = options.retries ?? 2
     const useBrowserFallback = options.useBrowserFallback ?? true
+    const allowDomainFallback = options.allowDomainFallback ?? true
 
     // --- Playwright-first for known-blocked hosts ---
     // Skip the fetch loop entirely and go straight to Playwright for hosts
@@ -204,6 +291,7 @@ export class AnimeVietsubProvider extends BaseScraper {
           throw new Error(`HTTP ${response.status}: ${response.statusText}`)
         }
 
+        this.rememberWorkingDomain(response.url, url)
         const html = await response.text()
 
         // Botasaurus: CloudflareDetectionException — detect CF challenge on 200 response
@@ -249,7 +337,15 @@ export class AnimeVietsubProvider extends BaseScraper {
 
         if (error instanceof Error) {
           if (this.isTimeoutLikeError(error)) {
+            if (allowDomainFallback) {
+              const fallbackHtml = await this.fetchHtmlFromAlternateDomains(url, options)
+              if (fallbackHtml) return fallbackHtml
+            }
             throw new Error('Yêu cầu quá lâu không phản hồi. Vui lòng thử lại.')
+          }
+          if (allowDomainFallback) {
+            const fallbackHtml = await this.fetchHtmlFromAlternateDomains(url, options)
+            if (fallbackHtml) return fallbackHtml
           }
           throw new Error(`Lỗi kết nối: ${error.message}`)
         }
@@ -258,7 +354,15 @@ export class AnimeVietsubProvider extends BaseScraper {
     }
 
     if (lastError instanceof Error && this.isTimeoutLikeError(lastError)) {
+      if (allowDomainFallback) {
+        const fallbackHtml = await this.fetchHtmlFromAlternateDomains(url, options)
+        if (fallbackHtml) return fallbackHtml
+      }
       throw new Error('Yêu cầu quá lâu không phản hồi. Vui lòng thử lại.')
+    }
+    if (allowDomainFallback) {
+      const fallbackHtml = await this.fetchHtmlFromAlternateDomains(url, options)
+      if (fallbackHtml) return fallbackHtml
     }
     throw new Error('Lỗi kết nối không xác định')
   }
@@ -385,6 +489,7 @@ export class AnimeVietsubProvider extends BaseScraper {
 
       // Extra settle time
       await page.waitForTimeout(1000)
+      this.rememberWorkingDomain(page.url(), url)
 
       const html = await page.content()
       if (!html || html.length < 100) {
