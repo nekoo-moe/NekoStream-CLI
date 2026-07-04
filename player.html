@@ -110,7 +110,7 @@
     });
 
 
-    window.initPlayer = function(streamInfo, baseDir) {
+    window.initPlayer = function(streamInfo, baseDir, cleanUA) {
       const container = document.getElementById('player-container');
       
       if (streamInfo.type === 'iframe') {
@@ -140,10 +140,11 @@
 
         const webview = document.createElement('webview');
         webview.setAttribute('partition', 'persist:player-session');
-        webview.setAttribute('useragent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
+        
+        const defaultUA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+        webview.setAttribute('useragent', cleanUA || defaultUA);
         webview.setAttribute('allowpopups', 'false');
-        webview.setAttribute('disablewebsecurity', '');
-        webview.setAttribute('webpreferences', 'webSecurity=no, contextIsolation=no, nodeIntegration=yes, nodeIntegrationInSubFrames=yes');
+        webview.setAttribute('webpreferences', 'contextIsolation=no, nodeIntegration=no, nodeIntegrationInSubFrames=no');
         webview.setAttribute('preload', preloadPath);
         webview.setAttribute('src', webviewSrc);  // src LAST so preload registers first
         webview.addEventListener('console-message', (e) => {

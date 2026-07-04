@@ -1,4 +1,5 @@
-const { app, BrowserWindow, session, ipcMain } = require('electron')
+const { app, BrowserWindow, session, ipcMain, webFrameMain } = require('electron')
+app.commandLine.appendSwitch('disable-blink-features', 'AutomationControlled')
 const path = require('path')
 
 let mainWindow = null
@@ -40,10 +41,28 @@ function createWindow() {
       const url = details.url;
       const lowerUrl = url.toLowerCase();
 
-      // ── Whitelist: never block requests originating FROM or loaded in an animevietsub tab ──
+      // ── Step 1: Unconditional block for intrusive / gambling / popup ad networks ──
+      // These are never whitelisted, even if loading inside an AnimeVietsub tab context.
+      const adKeywords = [
+        'in88', 'quayhu', 'nohu', 'bet188', '188bet', 'w88', 'fun88', 'm88', 'fb88',
+        'bk8', 'cmd368', 'letou', 'kyna', 'vwin', 'lixi88', 'loto188', 'kubet', 'ku-bet',
+        'thabet', 'tha-bet', 'ae888', 'fi88', '12bet', 'junk', 'popunder', 'pop-under',
+        'histats.com', 'clickadu', 'exoclick', 'juicyads', 'adsterra', 'yandex.ru',
+        'adskeeper', 'mgid.com', 'ad-maven', 'onclickads', 'propellerads', 'cloudflareinsights.com',
+        'decafeligiblyhad.com', 'sin88', 'morphify.net', 'bet', 'quayhu', 'nohu'
+      ];
+
+      const isIntrusiveAd = adKeywords.some(keyword => lowerUrl.includes(keyword)) ||
+                            (lowerUrl.includes('banner') && (lowerUrl.includes('casino') || lowerUrl.includes('tai-xiu') || lowerUrl.includes('keo-nha-cai')));
+
+      if (isIntrusiveAd) {
+        return callback({ cancel: true });
+      }
+
+      // ── Step 2: Whitelist for Google/Doubleclick adblock detectors ──
       // AVS fetches probe URLs (googlesyndication, doubleclick, etc.) to detect adblock.
       // If we cancel those probes, the site shows the "Phát hiện trình chặn quảng cáo" overlay.
-      // We must let these probes succeed so AVS thinks ads loaded normally.
+      // We must let these probes succeed inside the AVS tab context so the site runs normally.
       const referer   = (details.referrer  || '').toLowerCase();
       const initiator = (details.initiator || '').toLowerCase();
       const fromAvs   = referer.includes('animevietsub') || initiator.includes('animevietsub') || lowerUrl.includes('animevietsub');
@@ -64,19 +83,10 @@ function createWindow() {
         return callback({ cancel: false });
       }
 
-      const adKeywords = [
-        'in88', 'quayhu', 'nohu', 'bet188', '188bet', 'w88', 'fun88', 'm88', 'fb88',
-        'bk8', 'cmd368', 'letou', 'kyna', 'vwin', 'lixi88', 'loto188', 'kubet', 'ku-bet',
-        'thabet', 'tha-bet', 'ae888', 'fi88', '12bet', 'junk', 'popunder', 'pop-under',
-        'histats.com', 'clickadu', 'exoclick', 'juicyads', 'adsterra', 'yandex.ru',
-        'adskeeper', 'mgid.com', 'ad-maven', 'onclickads', 'propellerads', 'cloudflareinsights.com'
-      ];
-
-      const shouldBlock = adKeywords.some(keyword => lowerUrl.includes(keyword)) ||
-                          lowerUrl.includes('doubleclick.net') ||
+      // ── Step 3: Block standard ad domains for players/iframes ──
+      const shouldBlock = lowerUrl.includes('doubleclick.net') ||
                           lowerUrl.includes('googleads') ||
-                          lowerUrl.includes('googlesyndication') ||
-                          (lowerUrl.includes('banner') && (lowerUrl.includes('casino') || lowerUrl.includes('tai-xiu') || lowerUrl.includes('keo-nha-cai')));
+                          lowerUrl.includes('googlesyndication');
 
       if (shouldBlock) {
         return callback({ cancel: true });
@@ -143,9 +153,14 @@ function createWindow() {
   }
 
   mainWindow.webContents.on('did-finish-load', () => {
+    const originalUA = session.defaultSession.getUserAgent();
+    const cleanUA = originalUA
+      .replace(/Electron\/[0-9\.]+\s?/i, '')
+      .replace(/NekoStream-CLI\/[0-9\.]+\s?/i, '')
+      .trim();
     mainWindow?.webContents.executeJavaScript(`
-      window.initPlayer(${JSON.stringify(streamInfo)}, ${JSON.stringify(__dirname)});
-    `)
+      window.initPlayer(${JSON.stringify(streamInfo)}, ${JSON.stringify(__dirname)}, ${JSON.stringify(cleanUA)});
+    `);
   })
 
   // Listen for webview attachment, then watch all frames it creates.
@@ -174,14 +189,14 @@ function createWindow() {
       }
     })
 
-    guestWebContents.on('frame-created', (e, details) => {
-      const frame = details.frame
-
-      frame.once('dom-ready', () => {
-        const frameUrl = frame.url
-
-        const isPlayer = frameUrl.includes('googleapiscdn.com') || frameUrl.includes('googleapis.com') || frameUrl.includes('abyss') || frameUrl.includes('hydrax')
-        if (!isPlayer) return
+    const injectIntoFrame = (frame) => {
+      try {
+        const frameUrl = frame.url;
+        const isPlayer = frameUrl.includes('googleapiscdn.com') || 
+                         frameUrl.includes('googleapis.com') || 
+                         frameUrl.includes('abyss') || 
+                         frameUrl.includes('hydrax');
+        if (!isPlayer) return;
 
         // Dump DOM once for diagnostic (reads the real elements so we can write precise selectors)
         frame.executeJavaScript('document.documentElement.outerHTML')
@@ -194,24 +209,31 @@ function createWindow() {
           })
           .catch(() => {})
 
-        // Inject ad-blocking CSS + DOM cleaner directly inside the player frame
         frame.executeJavaScript(`
           (function() {
+            if (window.__neko_cleaner_active__) return;
+            window.__neko_cleaner_active__ = true;
+
             // --- CSS block ---
-            const style = document.createElement('style');
-            style.id = '__neko_adblock__';
-            style.textContent = [
-              'img[src*="in88"],img[src*="quayhu"],img[src*="nohu"],',
-              'img[src*="188bet"],img[src*="kubet"],img[src*="w88"],img[src*="fun88"],',
-              '[class*="pause-ad"],[id*="pause-ad"],[class*="ads-pause"],[id*="ads-pause"],',
-              '[class*="overlay-ad"],[id*="overlay-ad"],[class*="popup-ad"],[id*="popup-ad"],',
-              '[class*="quangcao"],[id*="quangcao"],[class*="qc-"],[id*="qc-"] { display:none!important }'
-            ].join('');
-            (document.head || document.documentElement).appendChild(style);
+            if (!document.getElementById('__neko_adblock__')) {
+              const style = document.createElement('style');
+              style.id = '__neko_adblock__';
+              style.textContent = [
+                'img[src*="in88"],img[src*="quayhu"],img[src*="nohu"],',
+                'img[src*="188bet"],img[src*="kubet"],img[src*="w88"],img[src*="fun88"],img[src*="sin88"],',
+                'div[style*="sin88"],div[style*="in88"],div[style*="bet"],',
+                '[class*="art-ad"],[class*="artplayer-ad"],[class*="art-ads"],[class*="artplayer-ads"],',
+                '[class*="ads-container"],[class*="ad-container"],[class*="pause-ad"],[id*="pause-ad"],',
+                '[class*="ads-pause"],[id*="ads-pause"],[class*="overlay-ad"],[id*="overlay-ad"],',
+                '[class*="popup-ad"],[id*="popup-ad"],[class*="quangcao"],[id*="quangcao"],',
+                '[class*="qc-"],[id*="qc-"] { display:none!important }'
+              ].join('');
+              (document.head || document.documentElement).appendChild(style);
+            }
 
             // --- DOM cleaner ---
             const AD_TEXTS = ['Đóng quảng cáo', 'Đóng và xem tiếp', 'Quảng cáo'];
-            const AD_SRCS  = ['in88', 'quayhu', 'nohu', '188bet', 'kubet', 'w88', 'fun88'];
+            const AD_SRCS  = ['in88', 'quayhu', 'nohu', '188bet', 'kubet', 'w88', 'fun88', 'sin88', 'bet', 'game'];
 
             const clean = () => {
               try {
@@ -245,14 +267,20 @@ function createWindow() {
                   const isAdSrc = AD_SRCS.some(k => src.includes(k));
                   if (!isAdTxt && !isAdSrc) return;
 
-                  // Walk up to find fixed/absolute overlay container
+                  // Walk up to find fixed/absolute overlay container or known ad class wrapper
                   let node = el;
                   for (let i = 0; i < 10; i++) {
                     const p = node.parentElement;
                     if (!p || p === document.body || p === document.documentElement) break;
                     if (p.querySelector('video') || p.querySelector('canvas')) break;
+                    
+                    const className = (p.className || '').toString().toLowerCase();
+                    const id = (p.id || '').toString().toLowerCase();
+                    const isAdContainer = className.includes('ad') || className.includes('qc') || className.includes('banner') || className.includes('popup') || className.includes('overlay') ||
+                                          id.includes('ad') || id.includes('qc') || id.includes('banner') || id.includes('popup') || id.includes('overlay');
+
                     const cs = getComputedStyle(p);
-                    if (cs.position === 'fixed' || cs.position === 'absolute') {
+                    if (cs.position === 'fixed' || cs.position === 'absolute' || isAdContainer) {
                       p.remove(); return;
                     }
                     node = p;
@@ -265,8 +293,24 @@ function createWindow() {
             clean();
             setInterval(clean, 250);
           })();
-        `).catch(() => {})
-      })
+        `).catch(() => {});
+      } catch (err) {
+        console.error('[Main Webview] Failed to inject frame:', err);
+      }
+    };
+
+    guestWebContents.on('did-frame-finish-load', (e, isMainFrame, frameProcessId, frameRoutingId) => {
+      const frame = webFrameMain.fromId(frameProcessId, frameRoutingId)
+      if (frame) {
+        injectIntoFrame(frame)
+      }
+    })
+
+    guestWebContents.on('frame-created', (e, details) => {
+      const frame = details.frame
+      setTimeout(() => {
+        injectIntoFrame(frame)
+      }, 500)
     })
   })
 
