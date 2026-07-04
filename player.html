@@ -23,37 +23,71 @@
       height: 100%;
       border: none;
     }
-    #close-btn, .dev-btn {
-      position: absolute;
-      top: 20px;
-      z-index: 9999;
-      background: rgba(0, 0, 0, 0.5);
-      color: white;
-      border: 1px solid rgba(255, 255, 255, 0.2);
-      padding: 8px 16px;
-      cursor: pointer;
-      border-radius: 4px;
-      font-size: 14px;
-      transition: background 0.2s;
-      -webkit-app-region: no-drag;
-    }
-    #close-btn {
-      right: 20px;
-    }
-    #close-btn:hover {
-      background: rgba(255, 0, 0, 0.7);
-    }
-    .dev-btn:hover {
-      background: rgba(37, 99, 235, 0.7);
-    }
-    .drag-region {
+    #top-nav {
       position: absolute;
       top: 0;
       left: 0;
-      right: 80px;
-      height: 40px;
+      right: 0;
+      height: 44px;
+      z-index: 10000;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: linear-gradient(to bottom, rgba(5, 8, 13, 0.82), rgba(5, 8, 13, 0.22), rgba(5, 8, 13, 0));
+      color: rgba(255, 255, 255, 0.92);
       -webkit-app-region: drag;
-      z-index: 9998;
+      user-select: none;
+      pointer-events: auto;
+    }
+    .nav-title {
+      min-width: 0;
+      padding-left: 16px;
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: 0.01em;
+      color: rgba(255, 255, 255, 0.88);
+      text-shadow: 0 1px 3px rgba(0, 0, 0, 0.55);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .window-controls {
+      display: flex;
+      height: 32px;
+      margin-right: 10px;
+      overflow: hidden;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 6px;
+      background: rgba(8, 12, 20, 0.38);
+      backdrop-filter: blur(10px);
+      pointer-events: auto;
+      -webkit-app-region: no-drag;
+    }
+    .window-btn {
+      width: 42px;
+      height: 32px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: 0;
+      border-right: 1px solid rgba(255, 255, 255, 0.1);
+      background: transparent;
+      color: rgba(255, 255, 255, 0.82);
+      font-size: 16px;
+      line-height: 1;
+      cursor: pointer;
+      transition: background 0.15s ease, color 0.15s ease;
+    }
+    .window-btn:last-child {
+      border-right: 0;
+    }
+    .window-btn:hover {
+      background: rgba(255, 255, 255, 0.14);
+      color: #fff;
+    }
+    .window-btn.close:hover {
+      background: #e5484d;
+      color: #fff;
     }
     #loading-overlay {
       position: absolute;
@@ -93,8 +127,14 @@
   <script src="./node_modules/artplayer/dist/artplayer.js"></script>
 </head>
 <body>
-  <div class="drag-region"></div>
-  <button id="close-btn" onclick="window.close()">✕ Đóng</button>
+  <header id="top-nav">
+    <div class="nav-title" id="nav-title">NekoStream Player</div>
+    <div class="window-controls">
+      <button class="window-btn" id="window-minimize" title="Minimize">-</button>
+      <button class="window-btn" id="window-maximize" title="Maximize">□</button>
+      <button class="window-btn close" id="window-close" title="Close">×</button>
+    </div>
+  </header>
   <div id="loading-overlay">
     <div class="spinner"></div>
     <div class="loading-text">Đang tải và làm sạch trình phát...</div>
@@ -106,6 +146,16 @@
     ipcRenderer.on('main-log', (e, msg) => {
       console.log('[Main Process]', msg);
     });
+
+    document.getElementById('window-minimize').addEventListener('click', () => {
+      ipcRenderer.send('player:minimize');
+    });
+    document.getElementById('window-maximize').addEventListener('click', () => {
+      ipcRenderer.send('player:toggle-maximize');
+    });
+    document.getElementById('window-close').addEventListener('click', () => {
+      window.close();
+    });
     
     // Keyboard shortcut: Escape to close
     document.addEventListener('keydown', (e) => {
@@ -115,6 +165,8 @@
 
     window.initPlayer = function(streamInfo, baseDir, cleanUA) {
       const container = document.getElementById('player-container');
+      const navTitle = document.getElementById('nav-title');
+      navTitle.textContent = streamInfo.provider ? `NekoStream · ${streamInfo.provider}` : 'NekoStream Player';
       
       if (streamInfo.type === 'iframe') {
         const overlay = document.getElementById('loading-overlay');

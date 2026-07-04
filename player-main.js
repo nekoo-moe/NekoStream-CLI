@@ -10,6 +10,21 @@ function logToRenderer(msg) {
   }
 }
 
+ipcMain.on('player:minimize', () => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.minimize()
+  }
+})
+
+ipcMain.on('player:toggle-maximize', () => {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  if (mainWindow.isMaximized()) {
+    mainWindow.unmaximize()
+  } else {
+    mainWindow.maximize()
+  }
+})
+
 function createWindow() {
   const streamData = process.env.NEKOSTREAM_CLI_STREAM
   if (!streamData) {
