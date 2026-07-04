@@ -328,7 +328,7 @@ export default async function prompts(options: any): Promise<any> {
         pageSize: options.pageSize || 15,
         source: async (term?: string) => {
           const query = normalized(term || '')
-          if (!query) return baseChoices.slice(0, options.pageSize || 15)
+          if (!query) return baseChoices
           return baseChoices.filter((choice: any, index: number) => {
             const haystack = normalized(`${index + 1} ${choice.name || ''} ${choice.description || ''}`)
             return haystack.includes(query)
