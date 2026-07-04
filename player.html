@@ -103,6 +103,9 @@
 
   <script>
     const { ipcRenderer } = require('electron');
+    ipcRenderer.on('main-log', (e, msg) => {
+      console.log('[Main Process]', msg);
+    });
     
     // Keyboard shortcut: Escape to close
     document.addEventListener('keydown', (e) => {
@@ -124,8 +127,34 @@
 
         const isGooglePlayer = streamInfo.url.includes('googleapiscdn.com') || streamInfo.url.includes('googleapis.com') || streamInfo.url.includes('abyss') || streamInfo.url.includes('hydrax');
         
+        const fs = require('fs');
         const path = require('path');
-        const preloadPath = path.resolve(baseDir || __dirname, 'webview-preload.js');
+        const originalPreloadPath = path.resolve(baseDir || __dirname, 'webview-preload.js');
+        let preloadPath = originalPreloadPath;
+
+        try {
+          let preloadContent = fs.readFileSync(originalPreloadPath, 'utf-8');
+          // Inject streamInfo directly into the preload script scope
+          const configInject = `const __streamInfo = ${JSON.stringify(streamInfo)};\n`;
+          preloadContent = configInject + preloadContent;
+
+          // Write to a temporary file
+          const tempPreloadPath = path.resolve(baseDir || __dirname, 'webview-preload-temp.js');
+          fs.writeFileSync(tempPreloadPath, preloadContent);
+          preloadPath = tempPreloadPath;
+          console.log('[Renderer] Created temp preload script at:', preloadPath);
+
+          // Delete temp preload script when window closes
+          window.addEventListener('unload', () => {
+            try {
+              if (fs.existsSync(tempPreloadPath)) {
+                fs.unlinkSync(tempPreloadPath);
+              }
+            } catch (e) {}
+          });
+        } catch (e) {
+          console.error('[Renderer] Failed to generate temp preload script, falling back to original:', e);
+        }
 
         // For Google Player: MUST load referer page first so the player thinks it's in an iframe
         // (googleapiscdn checks window.self !== window.top and refuses to play if at top level)
@@ -151,26 +180,9 @@
           console.log('[Webview Console]', e.message);
         });
 
-        let authInjected = false;
-
         webview.addEventListener('dom-ready', () => {
           try {
             console.log('[Renderer Webview] dom-ready for:', webview.getURL());
-
-            // Step 1: inject auth localStorage if needed
-            if (!authInjected && streamInfo.localStorageState && typeof streamInfo.localStorageState === 'object') {
-              const entries = Object.entries(streamInfo.localStorageState);
-              if (entries.length > 0) {
-                authInjected = true;
-                const injectScript = entries
-                  .map(([k, v]) => `try{localStorage.setItem(${JSON.stringify(k)},${JSON.stringify(v)})}catch(e){}`)
-                  .join(';');
-                webview.executeJavaScript(injectScript)
-                  .then(() => { webview.reload(); })
-                  .catch((err) => console.error('[Renderer Webview] LocalStorage inject failed:', err));
-                return;
-              }
-            }
 
             // Step 2: For Google Player, replace page body with a fullscreen iframe pointing to the actual stream
             // This makes googleapiscdn think it's embedded (window.self !== window.top = true inside the iframe)
@@ -232,8 +244,8 @@
               const fs = require('fs');
               const path = require('path');
               try {
-                const css = fs.readFileSync(path.join(__dirname, 'isolate.css'), 'utf-8');
-                const js = fs.readFileSync(path.join(__dirname, 'isolate.js'), 'utf-8');
+                const css = fs.readFileSync(path.join(baseDir || __dirname, 'isolate.css'), 'utf-8');
+                const js = fs.readFileSync(path.join(baseDir || __dirname, 'isolate.js'), 'utf-8');
                 webview.insertCSS(css);
                 webview.executeJavaScript(js);
               } catch (e) {

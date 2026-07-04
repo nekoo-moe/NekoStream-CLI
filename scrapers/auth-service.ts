@@ -962,6 +962,7 @@ export async function loginAnime47Interactive(): Promise<ProviderAuthStatus> {
     let userDisplayName: string | undefined
     let userAvatarUrl: string | undefined
     let userId: string | number | undefined
+    let lsState: Record<string, string> = {}
 
     try {
       const data = await page.evaluate(() => {
@@ -1045,23 +1046,10 @@ export async function loginAnime47Interactive(): Promise<ProviderAuthStatus> {
         capturedToken = (data as any).accessToken
       }
       // Also log what keys we found
-      const lsState: Record<string, string> = (data as any).localStorageState || {}
+      lsState = (data as any).localStorageState || {}
       const lsKeys = Object.keys(lsState)
       console.log(`[Auth] localStorage keys captured (${lsKeys.length}): ${lsKeys.join(', ')}`)
     } catch { /* non-fatal */ }
-
-    const lsState: Record<string, string> = (await page.evaluate(() => {
-      const state: Record<string, string> = {}
-      for (const store of [localStorage, sessionStorage]) {
-        for (let i = 0; i < store.length; i++) {
-          const key = store.key(i)!
-          const val = store.getItem(key)
-          if (val !== null) state[key] = val
-        }
-      }
-      return state
-    }).catch(() => {}))
-    || {}
 
     const session: AuthSession = {
       provider: 'anime47',

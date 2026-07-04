@@ -4,6 +4,12 @@ const path = require('path')
 
 let mainWindow = null
 
+function logToRenderer(msg) {
+  if (mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents) {
+    mainWindow.webContents.send('main-log', msg);
+  }
+}
+
 function createWindow() {
   const streamData = process.env.NEKOSTREAM_CLI_STREAM
   if (!streamData) {
@@ -49,13 +55,15 @@ function createWindow() {
         'thabet', 'tha-bet', 'ae888', 'fi88', '12bet', 'junk', 'popunder', 'pop-under',
         'histats.com', 'clickadu', 'exoclick', 'juicyads', 'adsterra', 'yandex.ru',
         'adskeeper', 'mgid.com', 'ad-maven', 'onclickads', 'propellerads', 'cloudflareinsights.com',
-        'decafeligiblyhad.com', 'sin88', 'morphify.net', 'bet', 'quayhu', 'nohu'
+        'decafeligiblyhad.com', 'sin88', 'morphify.net', 'bet', 'quayhu', 'nohu',
+        'adsco.re', 'adscore', 'popads', 'popcash'
       ];
 
       const isIntrusiveAd = adKeywords.some(keyword => lowerUrl.includes(keyword)) ||
                             (lowerUrl.includes('banner') && (lowerUrl.includes('casino') || lowerUrl.includes('tai-xiu') || lowerUrl.includes('keo-nha-cai')));
 
       if (isIntrusiveAd) {
+        logToRenderer(`[AdBlock] Blocked URL: ${details.url}`);
         return callback({ cancel: true });
       }
 
@@ -117,6 +125,19 @@ function createWindow() {
       sess.webRequest.onBeforeSendHeaders(filter, (details, callback) => {
         const headers = { ...details.requestHeaders }
         const targetUrl = details.url.toLowerCase()
+
+        // Force inject Authorization Bearer token for all Anime47 requests (document & API)
+        if (targetUrl.includes('anime47')) {
+          const token = streamInfo.localStorageState?.access_token;
+          if (token) {
+            headers['Authorization'] = `Bearer ${token}`;
+          }
+        }
+
+        if (targetUrl.includes('anime47') && (targetUrl.includes('api') || details.resourceType === 'mainFrame')) {
+          const authVal = headers['Authorization'] || headers['authorization'];
+          logToRenderer(`[Headers Debug] URL: ${details.url} Authorization: ${authVal ? 'Bearer [PRESENT]' : 'NONE'}`);
+        }
 
         // Only override Referer and Origin for player page loads and AJAX player requests
         // Do NOT override them for video chunk / media requests (like storage.googleapis.com)

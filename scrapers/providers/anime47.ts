@@ -424,10 +424,8 @@ export class Anime47Provider extends BaseScraper {
         number = episodes.length > 0 ? Math.max(...episodes.map(e => e.number)) + 1 : 1
       }
       
-      const epId = String(href.match(/(?:ep|tap)-\d+-(\d+)/i)?.[1] || `${animeId}-ep-${number}`)
-      
       episodes.push({
-        id: epId,
+        id: href,
         animeId,
         number,
         title: rawText || `Tập ${number}`,
@@ -448,13 +446,14 @@ export class Anime47Provider extends BaseScraper {
           if (!number || isNaN(number)) {
             number = episodes.length > 0 ? Math.max(...episodes.map(e => e.number)) + 1 : 1
           }
+          const absLink = this.absolutizeUrl(href)
           episodes.push({
-            id: String(href.match(/(?:ep|tap)-\d+-(\d+)/i)?.[1] || `${animeId}-ep-${number}`),
+            id: absLink,
             animeId,
             number,
             title: rawText || `Tập ${number}`,
             source: 'anime47',
-            href: this.absolutizeUrl(href)
+            href: absLink
           } as Episode & { href?: string })
         }
       })
@@ -725,13 +724,14 @@ export class Anime47Provider extends BaseScraper {
                       number = episodes.length > 0 ? Math.max(...episodes.map(e => e.number)) + 1 : 1
                     }
                     if (link) {
+                      const absLink = this.absolutizeUrl(link)
                       episodes.push({
-                        id: String(ep.id || link.match(/ep-\d+-(\d+)/i)?.[1] || `${animeId}-ep-${number}`),
+                        id: absLink,
                         animeId,
                         number,
                         title: String(ep.title || `Tập ${number}`),
                         source: 'anime47',
-                        href: this.absolutizeUrl(link)
+                        href: absLink
                       } as Episode & { href?: string })
                     }
                   }
@@ -747,13 +747,14 @@ export class Anime47Provider extends BaseScraper {
               if (!number || isNaN(number)) {
                 number = episodes.length > 0 ? Math.max(...episodes.map(e => e.number)) + 1 : 1
               }
+              const absLink = this.absolutizeUrl(`/xem/${animeId}/ep-${number}-${ep.id}`)
               episodes.push({
-                id: String(ep.id || `${animeId}-ep-${number}`),
+                id: absLink,
                 animeId,
                 number,
                 title: String(`Tập ${number}`),
                 source: 'anime47',
-                href: this.absolutizeUrl(`/xem/${animeId}/ep-${number}-${ep.id}`)
+                href: absLink
               })
            }
         }
@@ -790,7 +791,7 @@ export class Anime47Provider extends BaseScraper {
             number = episodes.length > 0 ? Math.max(...episodes.map(e => e.number)) + 1 : 1
           }
           episodes.push({
-            id: String(ep?.id || link.match(/ep-\d+-(\d+)/i)?.[1] || `${animeId}-ep-${number}`),
+            id: link,
             animeId,
             number,
             title: String(ep?.title || `Tập ${number}`),
@@ -820,13 +821,14 @@ export class Anime47Provider extends BaseScraper {
                 if (item['@type'] === 'TVEpisode' || item['@type'] === 'VideoObject' || (item.episodeNumber && item.url)) {
                   let number = Number(item.episodeNumber || item.name || 0)
                   if (!number || isNaN(number)) return
+                  const absLink = this.absolutizeUrl(item.url || watchUrl)
                   episodes.push({
-                    id: String(item.url?.match(/(?:ep|tap)-\d+-(\d+)/i)?.[1] || `${animeId}-ep-${number}`),
+                    id: absLink,
                     animeId,
                     number,
                     title: `Tập ${number}`,
                     source: 'anime47',
-                    href: this.absolutizeUrl(item.url || watchUrl)
+                    href: absLink
                   })
                 }
               })
@@ -865,7 +867,11 @@ export class Anime47Provider extends BaseScraper {
 
   async getVideoServers(episodeId: string): Promise<VideoServer[]> {
     try {
-      const episodeUrl = episodeId.startsWith('http') ? episodeId : this.absolutizeUrl(episodeId)
+      let relativePath = episodeId;
+      if (/^\d+$/.test(episodeId)) {
+        relativePath = `/xem/ep-${episodeId}`;
+      }
+      const episodeUrl = relativePath.startsWith('http') ? relativePath : this.absolutizeUrl(relativePath)
 
       // Anime47 streams from nonprofit.asia CDN are obfuscated (PNG-wrapped segments).
       // The only reliable playback is via iframe embedding the original watch page.
@@ -894,13 +900,22 @@ export class Anime47Provider extends BaseScraper {
       // For iframe servers, inject localStorage auth into webview so SPA doesn't show login.
       if (server.type === 'iframe') {
         const session = loadAuthSession('anime47')
+        let localStorageState = session?.localStorageState
+        if (!localStorageState && session?.accessToken) {
+          const anySession = session as any
+          localStorageState = {
+            access_token: session.accessToken,
+            user: typeof anySession.user === 'object' ? JSON.stringify(anySession.user) : String(anySession.user || ''),
+            token_expires_at: String(Date.now() + 3600 * 1000)
+          }
+        }
         return {
           url,
           type: 'iframe',
           quality: server.quality || 'HD',
           headers: { Referer: this.baseUrl, Origin: this.baseUrl },
           provider: 'anime47',
-          localStorageState: session?.localStorageState
+          localStorageState
         }
       }
 

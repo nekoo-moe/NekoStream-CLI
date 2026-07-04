@@ -1,6 +1,28 @@
 const isIframe = window.self !== window.top;
 const currentUrl = window.location.href;
 
+// Inject localStorage state immediately before any page scripts run
+;(function injectLocalStorage() {
+  try {
+    if (typeof __streamInfo !== 'undefined' && __streamInfo && __streamInfo.localStorageState && typeof __streamInfo.localStorageState === 'object') {
+      const hostname = window.location.hostname;
+      if (hostname.includes('anime47')) {
+        console.log('[Preload] Synchronously injecting Anime47 localStorage keys...');
+        for (const [k, v] of Object.entries(__streamInfo.localStorageState)) {
+          try {
+            localStorage.setItem(k, v);
+          } catch (e) {
+            console.error('[Preload] localStorage set failed:', e);
+          }
+        }
+        console.log('[Preload] Injection done. LocalStorage keys:', Object.keys(__streamInfo.localStorageState));
+      }
+    }
+  } catch (err) {
+    console.error('[Preload] injectLocalStorage error:', err);
+  }
+})();
+
 // ═══════════════════════════════════════════════════════════════════════════
 // 0-A. ADBLOCK DETECTION BYPASS — runs SYNCHRONOUSLY before any site JS
 //      Must be at the very top so it executes before site scripts check globals
