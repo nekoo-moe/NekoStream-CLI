@@ -140,3 +140,6 @@ vite.config.ts.timestamp-*
 release/
 .nekostream-data/
 botasaurus-master/
+scratch_watch_page.html
+dom-dump.html
+scratch_probe_output.html
