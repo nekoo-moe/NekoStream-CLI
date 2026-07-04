@@ -1,4 +1,4 @@
-import { confirm, input, select, Separator } from '@inquirer/prompts'
+import { confirm, input, search, select, Separator } from '@inquirer/prompts'
 import chalk from 'chalk'
 import readline from 'readline'
 import { glyphs, uiText } from './cli/theme'
@@ -82,13 +82,42 @@ function getGridChoices(choices: PromptChoice[]): GridChoice[] {
     }))
 }
 
+function normalized(value: string): string {
+  return value.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+}
+
 function gridLayout(choices: GridChoice[]) {
   const width = terminalWidth(96, 58)
   const longest = choices.reduce((max, choice) => Math.max(max, visibleLength(choice.name)), 0)
   const columnWidth = Math.max(14, Math.min(28, longest + 2))
   const columns = Math.max(1, Math.min(6, Math.floor(width / (columnWidth + 3)), choices.length))
-  const rows = Math.ceil(choices.length / columns)
-  return { columnWidth, columns, rows }
+  const maxRows = Math.max(6, Math.min(12, (process.stdout.rows || 30) - 12))
+  const rows = Math.max(1, Math.min(maxRows, Math.ceil(choices.length / columns)))
+  const pageSize = columns * rows
+  return { columnWidth, columns, rows, pageSize }
+}
+
+function filterGridChoices(choices: GridChoice[], query: string): GridChoice[] {
+  const term = normalized(query.trim())
+  if (!term) return choices
+
+  return choices.filter((choice, index) => {
+    const haystack = normalized(`${index + 1} ${choice.name} ${String((choice.value as any)?.number ?? '')}`)
+    return haystack.includes(term)
+  })
+}
+
+function findNumericChoice(choices: GridChoice[], query: string): GridChoice | undefined {
+  const raw = query.trim()
+  if (!/^\d+$/.test(raw)) return undefined
+  const target = Number(raw)
+
+  return choices.find((choice, index) => {
+    const valueNumber = Number((choice.value as any)?.number)
+    if (Number.isFinite(valueNumber) && valueNumber === target) return true
+    if (index + 1 === target) return true
+    return new RegExp(`\\b0*${target}\\b`).test(choice.name)
+  })
 }
 
 async function selectGrid(options: any, signal: AbortSignal): Promise<unknown> {
@@ -96,6 +125,8 @@ async function selectGrid(options: any, signal: AbortSignal): Promise<unknown> {
   if (choices.length === 0) return undefined
 
   let selected = 0
+  let page = 0
+  let query = ''
   let renderedLines = 0
   const message = normalizeMessage(options.message || 'Chọn')
 
@@ -106,9 +137,18 @@ async function selectGrid(options: any, signal: AbortSignal): Promise<unknown> {
       readline.clearScreenDown(process.stdout)
     }
 
-    const { columnWidth, columns, rows } = gridLayout(choices)
+    const filtered = filterGridChoices(choices, query)
+    const { columnWidth, columns, rows, pageSize } = gridLayout(filtered)
+    const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize))
+    page = Math.max(0, Math.min(page, pageCount - 1))
+    selected = Math.max(0, Math.min(selected, Math.max(0, filtered.length - 1)))
+    const pageStart = page * pageSize
+    const pageChoices = filtered.slice(pageStart, pageStart + pageSize)
+    const selectedOnPage = selected - pageStart
+
     const lines: string[] = [
       `${uiText.focus('?')} ${promptMessage(message)}`,
+      `${uiText.label('Search')} ${uiText.value(query || '')}${uiText.subtle(query ? '' : 'Gõ số tập/tên để lọc')}`,
       formatSeparator('DANH SÁCH TẬP', false)
     ]
 
@@ -117,18 +157,19 @@ async function selectGrid(options: any, signal: AbortSignal): Promise<unknown> {
 
       for (let col = 0; col < columns; col++) {
         const index = col * rows + row
-        if (index >= choices.length) continue
+        if (index >= pageChoices.length) continue
 
-        const prefix = index === selected ? uiText.focus(glyphs.pointer) : ' '
-        const label = truncate(choices[index].name, columnWidth - 2)
-        const cell = `${prefix} ${index === selected ? uiText.focus(label) : uiText.value(label)}`
+        const prefix = index === selectedOnPage ? uiText.focus(glyphs.pointer) : ' '
+        const label = truncate(pageChoices[index].name, columnWidth - 2)
+        const cell = `${prefix} ${index === selectedOnPage ? uiText.focus(label) : uiText.value(label)}`
         cells.push(padRight(cell, columnWidth))
       }
 
       lines.push(cells.join(uiText.border(` ${glyphs.vertical} `)))
     }
 
-    lines.push(chalk.gray('↑↓←→ di chuyển · Enter chọn · Esc quay lại'))
+    const pageLabel = filtered.length > pageSize ? ` · Trang ${page + 1}/${pageCount}` : ''
+    lines.push(chalk.gray(`↑↓←→ di chuyển · PgUp/PgDn trang · Enter chọn · Esc quay lại${pageLabel}`))
     process.stdout.write(`${lines.join('\n')}\n`)
     renderedLines = lines.length
   }
@@ -156,22 +197,64 @@ async function selectGrid(options: any, signal: AbortSignal): Promise<unknown> {
     }
 
     const onKeypress = (_str: string, key: any) => {
-      const { rows } = gridLayout(choices)
+      const filtered = filterGridChoices(choices, query)
+      const { rows, pageSize } = gridLayout(filtered)
+      const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize))
 
       if (key?.name === 'escape') {
         done(undefined)
         return
       }
 
+      if (key?.name === 'backspace') {
+        query = query.slice(0, -1)
+        selected = 0
+        page = 0
+        render()
+        return
+      }
+
       if (key?.name === 'return' || key?.name === 'enter') {
-        done(choices[selected].value)
+        const numericChoice = findNumericChoice(choices, query)
+        if (numericChoice) {
+          done(numericChoice.value)
+          return
+        }
+        if (filtered[selected]) {
+          done(filtered[selected].value)
+        } else {
+          render()
+        }
+        return
+      }
+
+      if (_str && _str >= ' ' && !key?.ctrl && !key?.meta && key?.name !== 'return') {
+        query += _str
+        selected = 0
+        page = 0
+        render()
+        return
+      }
+
+      if (key?.name === 'pageup') {
+        page = Math.max(0, page - 1)
+        selected = page * pageSize
+        render()
+        return
+      }
+
+      if (key?.name === 'pagedown') {
+        page = Math.min(pageCount - 1, page + 1)
+        selected = page * pageSize
+        render()
         return
       }
 
       if (key?.name === 'up') selected = Math.max(0, selected - 1)
-      if (key?.name === 'down') selected = Math.min(choices.length - 1, selected + 1)
+      if (key?.name === 'down') selected = Math.min(filtered.length - 1, selected + 1)
       if (key?.name === 'left') selected = Math.max(0, selected - rows)
-      if (key?.name === 'right') selected = Math.min(choices.length - 1, selected + rows)
+      if (key?.name === 'right') selected = Math.min(filtered.length - 1, selected + rows)
+      page = Math.floor(selected / pageSize)
 
       render()
     }
@@ -227,6 +310,41 @@ export default async function prompts(options: any): Promise<any> {
           },
           style: {
             keysHelpTip: () => chalk.gray('↑↓ di chuyển · Enter chọn · Esc quay lại')
+          }
+        } as any
+      }, { signal: ac.signal, clearPromptOnDone: true } as any)
+
+      if (result === '__GOBACK__') return {}
+      return { [options.name]: result }
+    }
+
+    if (options.type === 'search') {
+      const message = normalizeMessage(options.message || 'Tìm')
+      const includeBack = shouldOfferBack(options.message || '')
+      const baseChoices = mapChoices(options.choices || [], includeBack).filter((choice: any) => !(choice instanceof Separator))
+
+      const result = await search({
+        message: promptMessage(message),
+        pageSize: options.pageSize || 15,
+        source: async (term?: string) => {
+          const query = normalized(term || '')
+          if (!query) return baseChoices.slice(0, options.pageSize || 15)
+          return baseChoices.filter((choice: any, index: number) => {
+            const haystack = normalized(`${index + 1} ${choice.name || ''} ${choice.description || ''}`)
+            return haystack.includes(query)
+          }).slice(0, options.searchLimit || 50)
+        },
+        theme: {
+          helpMode: 'always',
+          prefix: {
+            idle: uiText.focus('?'),
+            done: uiText.success('>')
+          },
+          icon: {
+            cursor: uiText.focus(glyphs.pointer)
+          },
+          style: {
+            keysHelpTip: () => chalk.gray('Gõ tên/số · Enter chọn · Esc quay lại')
           }
         } as any
       }, { signal: ac.signal, clearPromptOnDone: true } as any)

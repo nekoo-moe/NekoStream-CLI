@@ -215,9 +215,10 @@ async function showAnimeList(providerName: string, title: string, list: AnimeSea
     flushStdin()
 
     const { animeId } = await prompts({
-      type: 'select',
+      type: 'search',
       name: 'animeId',
       message: 'Chọn anime (Esc: quay lại)',
+      pageSize: 15,
       choices: list.map((anime, idx) => {
         const desc = anime.status || anime.year?.toString() || ''
         const cleanTitle = anime.title.replace(/\r?\n|\r/g, ' ').trim()
@@ -423,9 +424,10 @@ async function showUserDataList(title: string, items: UserDataItem[], providerNa
     choices.push({ title: chalk.gray('← Quay lại'), value: '__back__' })
 
     const { animeId } = await prompts({
-      type: 'select',
+      type: 'search',
       name: 'animeId',
       message: 'Chọn anime để xem (Esc: quay lại)',
+      pageSize: PAGE_SIZE,
       choices
     })
 
