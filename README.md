@@ -8,7 +8,7 @@ Yêu cầu: [Node.js](https://nodejs.org/) (phiên bản 18+).
 
 Mở terminal và chạy lệnh cài đặt toàn cục:
 ```bash
-npm install -g nekostream-cli
+npm install -g nekostream
 ```
 
 Sau khi cài đặt xong, bạn có thể gọi ứng dụng từ bất kỳ đâu:
