@@ -76,6 +76,17 @@ export class AnimeVietsubProvider extends BaseScraper {
     acceptLanguage: 'vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7',
   }
 
+  private formatServerName(nameOrSource?: string, url?: string): string {
+    const value = `${nameOrSource || ''} ${url || ''}`.toLowerCase()
+    if (value.includes('du') || value.includes('googleapiscdn') || value.includes('storage.')) {
+      return 'DU (Normal Speed Fetch/Sometime Unstable)'
+    }
+    if (value.includes('hdx') || value.includes('hydrax') || value.includes('abyss') || value.includes('playhydrax')) {
+      return 'HDX (Fastest Speed Fetch/Very Stable)'
+    }
+    return nameOrSource?.trim() || 'Server'
+  }
+
   private normalizeBaseUrl(value: string): string {
     const url = value.startsWith('http') ? value : `https://${value}`
     return url.replace(/\/$/, '')
@@ -1328,10 +1339,7 @@ export class AnimeVietsubProvider extends BaseScraper {
                 const dataHref = $el.attr('data-href') || ''
                 const dataId = $el.attr('data-id') || ''
                 
-                let serverName = name
-                if (name.toLowerCase().includes('du')) serverName = 'DU (Recommended)'
-                else if (name.toLowerCase().includes('hdx')) serverName = 'HDX (Abyss)'
-                else if (name.toLowerCase().includes('hydrax')) serverName = 'Hydrax (Abyss)'
+                const serverName = this.formatServerName(name, dataHref)
                 
                 if (dataHref) {
                   // Construct composite query parameters
@@ -1373,7 +1381,7 @@ export class AnimeVietsubProvider extends BaseScraper {
             if (data?.link) {
               const link = String(data.link)
               servers.push({
-                name: link.includes('googleapiscdn') || link.includes('storage.') ? 'DU (Recommended)' : 'Main Server',
+                name: this.formatServerName(undefined, link),
                 embedUrl: link,
                 quality: 'FHD',
                 type: data.playTech || 'iframe',
@@ -1415,7 +1423,7 @@ export class AnimeVietsubProvider extends BaseScraper {
             const quality = 'FHD'
             
             servers.push({
-              name: isDUServer ? 'DU (Recommended)' : 'Main Server',
+              name: this.formatServerName(isDUServer ? 'du' : undefined, playerData.link),
               embedUrl: playerData.link,
               quality,
               type: playerData.playTech, // 'iframe', 'api', 'embed'
@@ -1442,19 +1450,19 @@ export class AnimeVietsubProvider extends BaseScraper {
         if (!isActive || !dataHash) return
         
         // Create server entry based on data-source
-        let serverName = 'Server'
-        if (dataSource === 'du') serverName = 'DU'
-        else if (dataSource === 'hydrax' || dataSource === 'hdx' || dataSource === 'abyss') serverName = 'HDX (Abyss)'
-        else if (dataSource === 'fb') serverName = 'FB Server'
-        else if (dataSource === 'gg') serverName = 'Google'
-        else if (dataSource) serverName = dataSource.toUpperCase()
+        let serverName = this.formatServerName(dataSource)
+        if (serverName === 'Server') {
+          if (dataSource === 'fb') serverName = 'FB Server'
+          else if (dataSource === 'gg') serverName = 'Google'
+          else if (dataSource) serverName = dataSource.toUpperCase()
+        }
         
         // Don't add duplicates
         if (!servers.some(s => s.name.includes(serverName))) {
           servers.push({
             name: serverName,
             embedUrl: dataHash, // This is the encrypted hash to decode
-            quality: 'HD',
+            quality: 'FHD',
             type: dataPlay || 'api',
             source: 'animevietsub'
           })
@@ -1470,11 +1478,12 @@ export class AnimeVietsubProvider extends BaseScraper {
         const dataPlay = $activeEp.attr('data-play')
         const dataSource = $activeEp.attr('data-source')
         
-        if (dataHash && !servers.some(s => s.name === serverName)) {
+        const normalizedServerName = this.formatServerName(serverName || dataSource)
+        if (dataHash && !servers.some(s => s.name === normalizedServerName)) {
           servers.push({
-            name: serverName || dataSource?.toUpperCase() || 'Server',
+            name: normalizedServerName,
             embedUrl: dataHash,
-            quality: 'HD',
+            quality: 'FHD',
             type: dataPlay || 'api',
             source: 'animevietsub'
           })
@@ -1491,9 +1500,9 @@ export class AnimeVietsubProvider extends BaseScraper {
         
         if (src && src.startsWith('http') && !servers.some(s => s.embedUrl === src)) {
           servers.push({
-            name: name || 'Backup',
+            name: this.formatServerName(name, src),
             embedUrl: src,
-            quality: 'HD',
+            quality: 'FHD',
             source: 'animevietsub'
           })
         }
@@ -1506,17 +1515,17 @@ export class AnimeVietsubProvider extends BaseScraper {
           if (src.startsWith('//')) src = `https:${src}`
           
           if (src && src.startsWith('http')) {
-            let name = 'Server'
-            if (src.includes('storage.googleapiscdn')) name = 'DU (CDN)'
-            else if (src.includes('hydrax') || src.includes('abyss.to') || src.includes('abysshost') || src.includes('playhydrax')) name = 'HDX (Abyss)'
-            else if (src.includes('fb') || src.includes('facebook')) name = 'FB'
-            else if (src.includes('stream')) name = 'Stream'
-            else if (src.includes('drive.google')) name = 'Google Drive'
+            let name = this.formatServerName(undefined, src)
+            if (name === 'Server') {
+              if (src.includes('fb') || src.includes('facebook')) name = 'FB'
+              else if (src.includes('stream')) name = 'Stream'
+              else if (src.includes('drive.google')) name = 'Google Drive'
+            }
             
             servers.push({
               name,
               embedUrl: src,
-              quality: 'HD',
+              quality: 'FHD',
               type: 'iframe',
               source: 'animevietsub'
             })
@@ -1531,7 +1540,7 @@ export class AnimeVietsubProvider extends BaseScraper {
           servers.push({
             name: 'Direct HLS',
             embedUrl: scriptMatch[1],
-            quality: 'HD',
+            quality: 'FHD',
             type: 'hls',
             source: 'animevietsub'
           })

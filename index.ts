@@ -338,10 +338,18 @@ async function openAnimeMenu(providerName: string, animeId: string) {
         type: 'select',
         name: 'server',
         message: 'Chọn server phát (Esc: quay lại)',
-        choices: servers.map((s, idx) => ({
-          title: `${chalk.bold(String(idx + 1).padStart(2))}. ${s.name} ${chalk.gray(`[${s.quality || 'Auto'}] (${s.type || 'stream'})`)}`,
-          value: s
-        }))
+        choices: servers.map((s, idx) => {
+          const number = chalk.bold(`${idx + 1}.`)
+          const quality = chalk.gray(`[${s.quality || 'Auto'}]`)
+          const detail = providerName === 'animevietsub'
+            ? quality
+            : chalk.gray(`[${s.quality || 'Auto'}] (${s.type || 'stream'})`)
+
+          return {
+            title: `${number} ${s.name} ${detail}`,
+            value: s
+          }
+        })
       })
 
       if (!server) break
