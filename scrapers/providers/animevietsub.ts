@@ -1088,29 +1088,97 @@ export class AnimeVietsubProvider extends BaseScraper {
       }
 
       if (numericId) {
-        // Use ajax endpoint to resolve server links directly.
-        const response = await fetch(`${this.baseUrl}/ajax/player?v=${encodeURIComponent(numericId)}`, {
-          headers: this.buildRequestHeaders({
-            'X-Requested-With': 'XMLHttpRequest',
-            'Referer': this.baseUrl
+        // First try the ajax POST backup endpoint to resolve all available server links
+        try {
+          const response = await fetch(`${this.baseUrl}/ajax/player`, {
+            method: 'POST',
+            headers: this.buildRequestHeaders({
+              'Content-Type': 'application/x-www-form-urlencoded',
+              'X-Requested-With': 'XMLHttpRequest',
+              'Referer': this.baseUrl
+            }),
+            body: `episodeId=${encodeURIComponent(numericId)}&backup=1`
           })
-        })
-        if (response.ok) {
-          const data: any = await response.json().catch(() => null)
-          const servers: VideoServer[] = []
-          if (data?.link) {
-            const link = String(data.link)
-            servers.push({
-              name: link.includes('googleapiscdn') || link.includes('storage.') ? 'DU (Recommended)' : 'Main Server',
-              embedUrl: link,
-              quality: 'FHD',
-              type: data.playTech || 'iframe',
-              source: 'animevietsub'
+          if (response.ok) {
+            const data: any = await response.json().catch(() => null)
+            if (data?.success && data.html) {
+              const $ = cheerio.load(data.html)
+              const servers: VideoServer[] = []
+              let watchPageUrl = ''
+              if (episodeId.startsWith('http')) {
+                watchPageUrl = episodeId
+              } else if (episodeId.includes('/')) {
+                watchPageUrl = `${this.baseUrl}${episodeId.startsWith('/') ? '' : '/'}${episodeId}`
+              } else {
+                const slug = episodeId.includes('tap-') ? episodeId : `tap-01-${episodeId}`
+                watchPageUrl = `${this.baseUrl}/xem-phim/${slug}.html`
+              }
+
+              $('a').each((_, el) => {
+                const $el = $(el)
+                const name = $el.text().trim()
+                const dataPlay = $el.attr('data-play') || 'iframe'
+                const dataHref = $el.attr('data-href') || ''
+                const dataId = $el.attr('data-id') || ''
+                
+                let serverName = name
+                if (name.toLowerCase().includes('du')) serverName = 'DU (Recommended)'
+                else if (name.toLowerCase().includes('hdx')) serverName = 'HDX (Abyss)'
+                else if (name.toLowerCase().includes('hydrax')) serverName = 'Hydrax (Abyss)'
+                
+                if (dataHref) {
+                  // Construct composite query parameters
+                  const params = new URLSearchParams({
+                    link: dataHref,
+                    play: dataPlay,
+                    id: dataId,
+                    referer: watchPageUrl
+                  })
+                  servers.push({
+                    name: serverName,
+                    embedUrl: params.toString(),
+                    quality: 'FHD',
+                    type: dataPlay,
+                    source: 'animevietsub'
+                  })
+                }
+              })
+              if (servers.length > 0) {
+                return servers
+              }
+            }
+          }
+        } catch (ajaxErr) {
+          console.error('Failed to fetch backup servers via AJAX POST:', ajaxErr)
+        }
+
+        // Fallback: Use GET ajax endpoint to resolve default server link directly.
+        try {
+          const response = await fetch(`${this.baseUrl}/ajax/player?v=${encodeURIComponent(numericId)}`, {
+            headers: this.buildRequestHeaders({
+              'X-Requested-With': 'XMLHttpRequest',
+              'Referer': this.baseUrl
             })
+          })
+          if (response.ok) {
+            const data: any = await response.json().catch(() => null)
+            const servers: VideoServer[] = []
+            if (data?.link) {
+              const link = String(data.link)
+              servers.push({
+                name: link.includes('googleapiscdn') || link.includes('storage.') ? 'DU (Recommended)' : 'Main Server',
+                embedUrl: link,
+                quality: 'FHD',
+                type: data.playTech || 'iframe',
+                source: 'animevietsub'
+              })
+            }
+            if (servers.length > 0) {
+              return servers
+            }
           }
-          if (servers.length > 0) {
-            return servers
-          }
+        } catch (e) {
+          console.error('Failed to fetch default server via AJAX GET:', e)
         }
       }
 
@@ -1169,7 +1237,7 @@ export class AnimeVietsubProvider extends BaseScraper {
         // Create server entry based on data-source
         let serverName = 'Server'
         if (dataSource === 'du') serverName = 'DU'
-        else if (dataSource === 'hydrax') serverName = 'Hydrax'
+        else if (dataSource === 'hydrax' || dataSource === 'hdx' || dataSource === 'abyss') serverName = 'HDX (Abyss)'
         else if (dataSource === 'fb') serverName = 'FB Server'
         else if (dataSource === 'gg') serverName = 'Google'
         else if (dataSource) serverName = dataSource.toUpperCase()
@@ -1233,7 +1301,7 @@ export class AnimeVietsubProvider extends BaseScraper {
           if (src && src.startsWith('http')) {
             let name = 'Server'
             if (src.includes('storage.googleapiscdn')) name = 'DU (CDN)'
-            else if (src.includes('hydrax')) name = 'Hydrax'
+            else if (src.includes('hydrax') || src.includes('abyss.to') || src.includes('abysshost') || src.includes('playhydrax')) name = 'HDX (Abyss)'
             else if (src.includes('fb') || src.includes('facebook')) name = 'FB'
             else if (src.includes('stream')) name = 'Stream'
             else if (src.includes('drive.google')) name = 'Google Drive'
@@ -1309,6 +1377,11 @@ export class AnimeVietsubProvider extends BaseScraper {
         }
       }
 
+      // If it is an unresolved hash, use the AJAX API to resolve it first
+      if (!embedUrl.startsWith('http') && !embedUrl.startsWith('//')) {
+        return await this.extractFromAPIServer(embedUrl, server)
+      }
+
       // Fix URL format
       if (!embedUrl.startsWith('http')) {
         if (embedUrl.startsWith('//')) {
@@ -1322,6 +1395,11 @@ export class AnimeVietsubProvider extends BaseScraper {
       // The iframe itself loads an HLS player that plays video
       if (embedUrl.includes('storage.googleapiscdn.com') || server.type === 'iframe') {
         return await this.extractFromDUServer(embedUrl, server)
+      }
+
+      // For Abyss/Hydrax server, extract using custom browser interception
+      if (embedUrl.includes('abyss') || embedUrl.includes('playhydrax') || server.name.includes('HDX') || server.name.includes('Hydrax')) {
+        return await this.extractFromAbyssServer(embedUrl, server)
       }
       
       // For API type, use AJAX to get video URL
@@ -1340,6 +1418,35 @@ export class AnimeVietsubProvider extends BaseScraper {
       return {
         url: fallbackUrl,
         type: server.type === 'iframe' ? 'iframe' : 'hls',
+        quality: server.quality || 'HD',
+        headers: {
+          'Referer': this.baseUrl,
+          'Origin': this.baseUrl
+        }
+      }
+    }
+  }
+
+  /**
+   * Extract video from Abyss/Hydrax server (abyss.to / abysshost / playhydrax)
+   * The player iframe loads video content that we need to intercept
+   */
+  private async extractFromAbyssServer(embedUrl: string, server: VideoServer & { referer?: string }): Promise<StreamInfo | null> {
+    try {
+      const refererVal = server.referer || embedUrl
+      return {
+        url: embedUrl,
+        type: 'iframe',
+        quality: server.quality || 'FHD',
+        headers: {
+          'Referer': refererVal,
+          'Origin': new URL(refererVal).origin
+        }
+      }
+    } catch (e) {
+      return {
+        url: embedUrl,
+        type: 'iframe',
         quality: server.quality || 'HD',
         headers: {
           'Referer': this.baseUrl,
@@ -1484,21 +1591,47 @@ export class AnimeVietsubProvider extends BaseScraper {
     // The hash is used by the site's internal API
     // We need to call the same endpoint the player uses
     try {
+      let bodyParams = ''
+      let refererUrl = this.baseUrl + '/'
+      if (hash.includes('link=') && hash.includes('play=')) {
+        bodyParams = hash + '&backuplinks=1'
+        const parsed = new URLSearchParams(hash)
+        if (parsed.has('referer')) {
+          refererUrl = parsed.get('referer') || refererUrl
+        }
+      } else {
+        bodyParams = `link=${encodeURIComponent(hash)}&play=${encodeURIComponent(server.type || 'api')}&id=0&backuplinks=1`
+      }
+
       const response = await fetch(`${this.baseUrl}/ajax/player`, {
         method: 'POST',
         headers: this.buildRequestHeaders({
           'Content-Type': 'application/x-www-form-urlencoded',
-          'X-Requested-With': 'XMLHttpRequest'
+          'X-Requested-With': 'XMLHttpRequest',
+          'Referer': this.baseUrl + '/'
         }),
-        body: `hash=${encodeURIComponent(hash)}`
+        body: bodyParams
       })
       
       if (response.ok) {
         const data = await response.json() as Record<string, string>
         if (data.link) {
+          let link = data.link
+          if (link.startsWith('//')) link = `https:${link}`
+          
+          if (link.includes('abyss') || link.includes('playhydrax') || link.includes('hydrax')) {
+            const dummyServer = { ...server, embedUrl: link, referer: refererUrl }
+            return await this.extractFromAbyssServer(link, dummyServer)
+          }
+
+          if (link.includes('storage.googleapiscdn.com') || link.includes('storage.googleapis.com')) {
+            const dummyServer = { ...server, embedUrl: link }
+            return await this.extractFromDUServer(link, dummyServer)
+          }
+
           return {
-            url: data.link,
-            type: data.link.includes('.m3u8') ? 'hls' : 'mp4',
+            url: link,
+            type: link.includes('.m3u8') ? 'hls' : 'mp4',
             quality: server.quality || 'HD',
             headers: {
               'Referer': this.baseUrl,

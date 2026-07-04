@@ -106,8 +106,21 @@ function createWindow() {
       const filter = { urls: ['*://*/*'] }
       sess.webRequest.onBeforeSendHeaders(filter, (details, callback) => {
         const headers = { ...details.requestHeaders }
-        if (streamInfo.headers.Referer) headers['Referer'] = streamInfo.headers.Referer
-        if (streamInfo.headers.Origin) headers['Origin'] = streamInfo.headers.Origin
+        const targetUrl = details.url.toLowerCase()
+
+        // Only override Referer and Origin for player page loads and AJAX player requests
+        // Do NOT override them for video chunk / media requests (like storage.googleapis.com)
+        const isPlayerRequest = targetUrl.includes('abyss') || 
+                                targetUrl.includes('hydrax') || 
+                                targetUrl.includes('googleapiscdn.com') ||
+                                targetUrl.includes('ajax/player') ||
+                                targetUrl.includes('animevietsub');
+
+        if (isPlayerRequest) {
+          if (streamInfo.headers.Referer) headers['Referer'] = streamInfo.headers.Referer
+          if (streamInfo.headers.Origin) headers['Origin'] = streamInfo.headers.Origin
+        }
+        
         if (streamInfo.headers['User-Agent']) headers['User-Agent'] = streamInfo.headers['User-Agent']
         callback({ requestHeaders: headers })
       })
@@ -131,7 +144,7 @@ function createWindow() {
 
   mainWindow.webContents.on('did-finish-load', () => {
     mainWindow?.webContents.executeJavaScript(`
-      window.initPlayer(${JSON.stringify(streamInfo)});
+      window.initPlayer(${JSON.stringify(streamInfo)}, ${JSON.stringify(__dirname)});
     `)
   })
 
@@ -139,13 +152,35 @@ function createWindow() {
   // frame-created fires for EVERY frame (including dynamically injected iframes),
   // and WebFrameMain.executeJavaScript() bypasses all cross-origin restrictions.
   mainWindow.webContents.on('did-attach-webview', (event, guestWebContents) => {
+    // Block all popups from the player webview
+    guestWebContents.setWindowOpenHandler((details) => {
+      console.log('[Webview Blocked popup]:', details.url)
+      return { action: 'deny' }
+    })
+
+    // Block all non-video / non-player redirects
+    guestWebContents.on('will-navigate', (e, url) => {
+      const lowerUrl = url.toLowerCase()
+      const isAllowed = lowerUrl.includes('animevietsub') || 
+                        lowerUrl.includes('abyss') || 
+                        lowerUrl.includes('hydrax') || 
+                        lowerUrl.includes('googleapis') ||
+                        lowerUrl.includes('localhost') ||
+                        lowerUrl.startsWith('about:') ||
+                        lowerUrl.startsWith('chrome-extension:')
+      if (!isAllowed) {
+        console.log('[Webview Blocked redirect]:', url)
+        e.preventDefault()
+      }
+    })
+
     guestWebContents.on('frame-created', (e, details) => {
       const frame = details.frame
 
       frame.once('dom-ready', () => {
         const frameUrl = frame.url
 
-        const isPlayer = frameUrl.includes('googleapiscdn.com') || frameUrl.includes('googleapis.com')
+        const isPlayer = frameUrl.includes('googleapiscdn.com') || frameUrl.includes('googleapis.com') || frameUrl.includes('abyss') || frameUrl.includes('hydrax')
         if (!isPlayer) return
 
         // Dump DOM once for diagnostic (reads the real elements so we can write precise selectors)
@@ -180,6 +215,28 @@ function createWindow() {
 
             const clean = () => {
               try {
+                // Bypass Abyss popup click-jacking by rewriting the overlay click event
+                if (window.abyssConfig || document.onclick || document.ontouchend) {
+                  if (document.onclick !== null || document.ontouchend !== null) {
+                    document.onclick = null;
+                    document.ontouchend = null;
+                    const overlay = document.getElementById('overlay');
+                    if (overlay) {
+                      overlay.onclick = (e) => {
+                        e.stopPropagation();
+                        e.preventDefault();
+                        if (window.jwplayer && typeof window.jwplayer === 'function') {
+                          try {
+                            window.jwplayer().play();
+                          } catch(err) {}
+                        }
+                        overlay.remove();
+                      };
+                      overlay.ontouchend = overlay.onclick;
+                    }
+                  }
+                }
+
                 if (!document.body) return;
                 document.querySelectorAll('div,section,article,button,a,span,img').forEach(el => {
                   const txt = (el.innerText || el.textContent || '').trim();
