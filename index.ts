@@ -6,7 +6,7 @@ import chalk from 'chalk'
 import ora from 'ora'
 import { providers, getProvider } from './providers'
 import { launchPlayer } from './player'
-import { clearScreen, printBanner, drawAnimeCard, drawAnimeInfoCard, printEmpty, printError, printStatusStrip, printSuccess } from './ui'
+import { clearScreen, printBanner, drawAnimeCard, drawAnimeInfoCard, printEmpty, printError, printStatusStrip, printSuccess, printUpdateNotice } from './ui'
 import { loadSettings, saveSettings, loadHistory, saveHistoryEntry, clearHistory } from './storage'
 import { initDiscord, toggleDiscordPresence, setBrowsingPresence, setWatchingPresence, clearDiscordPresence } from './discord'
 import type { AnimeDetail, AnimeSearchResult } from './scrapers/base'
@@ -598,12 +598,7 @@ async function checkUpdate() {
 
     if (latestVersion && latestVersion !== currentVersion) {
       clearScreen()
-      console.log(chalk.yellow('╭─────────────────────────────────────────────────────────────╮'))
-      console.log(chalk.yellow('│                                                             │'))
-      console.log(chalk.yellow(`│  NEKOSTREAM ĐÃ CÓ CẬP NHẬT MỚI ! ${chalk.red(currentVersion)} → ${chalk.green(latestVersion)}                  │`))
-      console.log(chalk.yellow('│  Vui lòng cập nhật ứng dụng CLI để tiếp tục sử dụng ứng dụng.  │'))
-      console.log(chalk.yellow('│                                                             │'))
-      console.log(chalk.yellow('╰─────────────────────────────────────────────────────────────╯\n'))
+      printUpdateNotice(currentVersion, latestVersion, NPM_PACKAGE_NAME)
 
       const { update } = await prompts({
         type: 'confirm',

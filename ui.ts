@@ -101,6 +101,23 @@ export function printBanner(title?: string, subtitle?: string) {
   console.log('')
 }
 
+export function printUpdateNotice(currentVersion: string, latestVersion: string, packageName: string) {
+  const width = terminalWidth(86, 62)
+  const innerWidth = width - 4
+  const title = `${uiText.warning('Cập nhật mới')} ${uiText.danger(currentVersion)} ${uiText.subtle('->')} ${uiText.success(latestVersion)}`
+  const command = `npm i -g ${packageName}@latest`
+
+  console.log('')
+  console.log(borderLine(width, glyphs.topLeft, glyphs.topRight, true))
+  console.log(boxedLine(`${uiText.brand('NekoStream')} ${uiText.subtle(glyphs.dot)} ${title}`, width, true))
+  console.log(borderLine(width, glyphs.teeLeft, glyphs.teeRight))
+  for (const line of wrapText('Vui lòng cập nhật CLI để tiếp tục sử dụng ứng dụng.', innerWidth)) {
+    console.log(boxedLine(uiText.value(line), width))
+  }
+  console.log(boxedLine(`${uiText.label('Lệnh')} ${uiText.focus(command)}`, width))
+  console.log(`${borderLine(width, glyphs.bottomLeft, glyphs.bottomRight)}\n`)
+}
+
 export function printStatusStrip(items: StatusItem[]) {
   const width = terminalWidth(92, 58)
   const innerWidth = width - 4
