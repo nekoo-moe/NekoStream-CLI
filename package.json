@@ -17,7 +17,7 @@
   ],
   "main": "dist/index.js",
   "bin": {
-    "nekostream": "./bin/nekostream.js"
+    "nekostream": "bin/nekostream.js"
   },
   "scripts": {
     "start": "tsx index.ts",
