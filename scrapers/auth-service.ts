@@ -117,6 +117,14 @@ async function getAdblocker() {
  * Call applyAdBlockingToPage(page) after creating each page for network blocking.
  */
 async function applyAdBlocking(context: import('playwright').BrowserContext): Promise<void> {
+  await context.route('**/*', (route) => {
+    const url = route.request().url().toLowerCase()
+    if (/win88|yo88|i9bet|sunwin|fb88|vsbet|five88|hit\.club|gemwin|789bet|7zwin|rikvip|rik\.|nohu|nổ-hũ|casino|doubleclick|googlesyndication|googleadservices|adservice|exoclick|trafficjunky|popads|adcash|propellerads|adsterra|mgid|outbrain|taboola/.test(url)) {
+      return route.abort()
+    }
+    return route.continue()
+  })
+
   // CSS + JS pop-up blocking at context level (runs on every page before load)
   await context.addInitScript(() => {
     window.open = () => null
@@ -130,14 +138,16 @@ async function applyAdBlocking(context: import('playwright').BrowserContext): Pr
         a[href*="win88"], a[href*="yo88"], a[href*="i9bet"],
         a[href*="sunwin"], a[href*="vsbet"], a[href*="five88"],
         a[href*="hit.club"], a[href*="gemwin"], a[href*="789bet"],
+        a[href*="7zwin"], a[href*="rikvip"], a[href*="casino"],
         img[src*="win88"], img[src*="yo88"], img[src*="i9bet"],
         img[src*="sunwin"], img[src*="gemwin"],
+        img[src*="vsbet"], img[src*="five88"], img[src*="hit.club"],
+        img[src*="7zwin"], img[src*="rikvip"], img[src*="casino"],
         [class*="quang-cao"], [id*="quang-cao"],
+        [class*="advert"], [id*="advert"], [class*="banner-ad"], [id*="banner-ad"],
         [class*="popup-ad"], [class*="ad-overlay"],
         [class*="sticky-ad"], [class*="fixed-ad"], [class*="float-ad"],
-        div.MnBr.EcBgA, div.announcement, div a img, section.Wdgt, 
-        aside div ul, footer.Footer, div.header-ads-pc, ol.breadcrumb, 
-        aside.widget-area, header.Header.MnBrCn.BgA.HdOp1 {
+        div.header-ads-pc, div[class*="header-ads"], div[id*="header-ads"] {
           display: none !important;
           visibility: hidden !important;
           pointer-events: none !important;
@@ -145,33 +155,42 @@ async function applyAdBlocking(context: import('playwright').BrowserContext): Pr
       `
       document.head?.appendChild(style)
     }
+
+    const adPattern = /win88|yo88|i9bet|sunwin|fb88|vsbet|five88|hit\.club|gemwin|789bet|7zwin|rikvip|rik\.|nohu|nổ\s*hũ|casino|worldcup|uy\s*lực/i
+
+    const removeAdNode = (node: Element) => {
+      const container = node.closest('a, iframe, [class*="banner"], [id*="banner"], [class*="ads"], [id*="ads"], [class*="ad-"], [id*="ad-"]')
+      ;(container || node).remove()
+    }
+
+    const cleanupAds = () => {
+      try {
+        const candidates = document.querySelectorAll('a[href], img[src], iframe[src], [style*="position: fixed"], [style*="z-index"]')
+        for (const el of Array.from(candidates)) {
+          const marker = `${el.getAttribute('href') || ''} ${el.getAttribute('src') || ''} ${el.getAttribute('alt') || ''} ${el.getAttribute('title') || ''} ${el.textContent || ''}`
+          if (adPattern.test(marker)) removeAdNode(el)
+        }
+
+        for (const el of Array.from(document.querySelectorAll('div, section, aside'))) {
+          const html = el.outerHTML.slice(0, 2000)
+          const rect = el.getBoundingClientRect()
+          if (adPattern.test(html) && (rect.width > 250 || rect.height > 80)) el.remove()
+        }
+      } catch {}
+    }
+
     if (document.readyState === 'loading') {
-      document.addEventListener('DOMContentLoaded', hideAds)
+      document.addEventListener('DOMContentLoaded', () => {
+        hideAds()
+        cleanupAds()
+      })
     } else {
       hideAds()
+      cleanupAds()
     }
-    const startObserver = () => {
-      // Periodic aggressive cleanup to handle SPAs and race conditions
-      setInterval(() => {
-        try {
-          const elements = document.querySelectorAll('div.MnBr.EcBgA, div.announcement, div a img, section.Wdgt, aside div ul, footer.Footer, div.header-ads-pc, ol.breadcrumb, aside.widget-area, header.Header.MnBrCn.BgA.HdOp1, [class*="quang-cao"], [id*="quang-cao"], [class*="popup-ad"], [class*="ad-overlay"], [class*="sticky-ad"], [class*="fixed-ad"], [class*="float-ad"]');
-          for (const el of Array.from(elements)) {
-            el.remove();
-          }
-          
-          // Also check all links and images for ad keywords
-          const allElements = document.querySelectorAll('a, img');
-          for (const el of Array.from(allElements)) {
-            const html = (el.outerHTML || '').toLowerCase();
-            if (/win88|yo88|i9bet|sunwin|vsbet|five88|hit\.club|gemwin|789bet/.test(html)) {
-              el.remove();
-            }
-          }
-        } catch (e) {}
-      }, 50)
-    }
-    
-    startObserver();
+
+    new MutationObserver(cleanupAds).observe(document.documentElement, { childList: true, subtree: true })
+    setInterval(cleanupAds, 500)
   })
 }
 
@@ -184,15 +203,6 @@ async function applyAdBlockingToPage(page: import('playwright').Page): Promise<v
   const blocker = await getAdblocker()
   if (blocker) {
     await blocker.enableBlockingInPage(page)
-  } else {
-    // Fallback: manual domain blocking
-    await page.route('**/*', (route) => {
-      const url = route.request().url().toLowerCase()
-      if (/win88|yo88|i9bet|sunwin|fb88|vsbet|five88|hit\.club|gemwin|789bet|doubleclick|googlesyndication|exoclick|trafficjunky|popads|adcash|propellerads/.test(url)) {
-        return route.abort()
-      }
-      return route.continue()
-    })
   }
 }
 
@@ -245,40 +255,13 @@ export async function loginAnimeVietsubInteractive(): Promise<ProviderAuthStatus
     Object.defineProperty(navigator, 'webdriver', { get: () => undefined })
     ;(globalThis as any).chrome = { runtime: {} }
   })
-  // Skip adblocking for AnimeVietsub login as requested by the user ("không cần adblock cho provider này")
-  // await applyAdBlocking(context)
+  await applyAdBlocking(context)
 
   const page = await context.newPage()
-  // await applyAdBlockingToPage(page)
+  await applyAdBlockingToPage(page)
 
   try {
     await page.goto(AVS_LOGIN_URL, { waitUntil: 'domcontentloaded', timeout: 30000 })
-
-    // Force inject CSS bypassed for AnimeVietsub to avoid triggering adblocker detection
-    /*
-    await page.addStyleTag({
-      content: `
-        a[href*="win88"], a[href*="yo88"], a[href*="i9bet"],
-        a[href*="sunwin"], a[href*="vsbet"], a[href*="five88"],
-        a[href*="hit.club"], a[href*="gemwin"], a[href*="789bet"],
-        img[src*="win88"], img[src*="yo88"], img[src*="i9bet"],
-        img[src*="sunwin"], img[src*="gemwin"],
-        [class*="quang-cao"], [id*="quang-cao"],
-        [class*="popup-ad"], [class*="ad-overlay"],
-        [class*="sticky-ad"], [class*="fixed-ad"], [class*="float-ad"],
-        div.MnBr.EcBgA, div.announcement, div a img, section.Wdgt, 
-        aside div ul, footer.Footer, div.header-ads-pc, ol.breadcrumb, 
-        aside.widget-area, header.Header.MnBrCn.BgA.HdOp1 {
-          display: none !important;
-          visibility: hidden !important;
-          pointer-events: none !important;
-          opacity: 0 !important;
-          width: 0 !important;
-          height: 0 !important;
-        }
-      `
-    }).catch(() => {})
-    */
 
     // Wait for successful login (redirect away from login page)
     await page.waitForFunction(
