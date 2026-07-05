@@ -1,6 +1,6 @@
 name: Uhh... tôi muốn có tính năng mới?
 description: Đang muốn thêm tính năng gì ư? Cho biết cái coi nào!
-type: Bug
+type: Feature
 labels: [pending triage]
 body:
   - type: markdown

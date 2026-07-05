@@ -1,6 +1,6 @@
 name: Uhh... hình như có lỗi rồi?
 description: Phát hiện vấn đề khi đang xài ứng dụng? Cho biết cái coi nào!
-type: Bug
+type: Issue
 labels: [pending triage]
 body:
   - type: markdown
