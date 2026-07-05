@@ -1,0 +1,47 @@
+name: Uhh... hình như có lỗi rồi?
+description: Phát hiện vấn đề khi đang xài ứng dụng? Cho biết cái coi nào!
+type: Issue
+labels: [pending triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Vui lòng đặt tên issue đúng format "issue: <mô tả ngắn gọn>"
+  - type: textarea
+    id: bug-description
+    attributes:
+      label: Mô tả lỗi một cách chi tiết
+      description: Vui lòng mô tả lỗi bạn gặp phải trong quá trình sử dụng sản phẩm vào ô dưới đây.
+      placeholder: Viết mô tả lỗi của bạn vào đây.
+    validations:
+      required: true
+  - type: textarea
+    id: bug-logs
+    attributes:
+      label: Output log của sản phẩm
+      description: Vui lòng cung cấp rõ Log (install/usage) tại đây để chúng tôi biết lỗi gì đã diễn ra.
+      placeholder: Dán nội dung Log vào đây.
+    validations:
+      required: false
+  - type: textarea
+    id: issue-suggestions
+    attributes:
+      label: Bạn có hướng xử lý gì không?
+      description: Nếu bạn nghĩ bạn có cách xử lý vấn đề này, thử gợi ý cho chúng tôi nhé!
+      placeholder: Đừng ngần ngại mà chia sẻ cho chúng tôi biết, nhờ đó chúng tôi có thể phát triển sản phẩm nào!
+    validations:
+      required: false
+  - type: checkboxes
+    id: checkboxes
+    attributes:
+      label: Xác nhận lại trước khi gửi
+      description: Trước khi bạn gửi báo cáo lỗi, vui lòng xác nhận rằng
+      options:
+        - label: Đồng ý bạn đã đọc và thực hiện theo [MIT License](https://github.com/nekoo-moe/NekoStream-CLI/blob/main/LICENSE).
+          required: true
+        - label: Không có một báo cáo nào tương tự với lỗi bạn đang báo cáo (nếu có, vui lòng đóng bài báo cáo này).
+          required: true
+        - label: Đây phải là một bài báo cáo lỗi, nếu có câu hỏi vui lòng qua mục Discussion.
+          required: true
+        - label: Muốn submit PR(s) để sửa lỗi này (không bắt buộc).
+          required: false

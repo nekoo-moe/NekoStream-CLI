@@ -1,0 +1,31 @@
+name: Uhh... tôi muốn có tính năng mới?
+description: Đang muốn thêm tính năng gì ư? Cho biết cái coi nào!
+type: Feature
+labels: [pending triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Vui lòng đặt tên issue đúng format "feature: <mô tả ngắn gọn>"
+  - type: textarea
+    id: bug-description
+    attributes:
+      label: Mô tả tính năng một cách chi tiết
+      description: Vui lòng mô tả tính năng bạn muốn thêm vào ở đây.
+      placeholder: Viết mô tả tính năng của bạn vào đây.
+    validations:
+      required: true
+  - type: checkboxes
+    id: checkboxes
+    attributes:
+      label: Xác nhận lại trước khi gửi
+      description: Trước khi bạn gửi báo cáo tính năng, vui lòng xác nhận rằng
+      options:
+        - label: Đồng ý bạn đã đọc và thực hiện theo [MIT License](https://github.com/nekoo-moe/NekoStream-CLI/blob/main/LICENSE).
+          required: true
+        - label: Không có một bài đề xuất nào tương tự (nếu có, vui lòng đóng bài đề xuất này).
+          required: true
+        - label: Đây phải là một bài đề xuất tính năng, nếu có câu hỏi vui lòng qua mục Discussion.
+          required: true
+        - label: Muốn submit PR(s) để sửa tính năng này (không bắt buộc).
+          required: false
