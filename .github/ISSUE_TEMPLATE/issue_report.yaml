@@ -24,7 +24,7 @@ body:
     validations:
       required: false
   - type: textarea
-    id: bug-logs
+    id: issue-suggestions
     attributes:
       label: Bạn có hướng xử lý gì không?
       description: Nếu bạn nghĩ bạn có cách xử lý vấn đề này, thử gợi ý cho chúng tôi nhé!
