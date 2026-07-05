@@ -237,7 +237,7 @@ async function showAnimeList(providerName: string, title: string, list: AnimeSea
 }
 
 async function openAnimeMenu(providerName: string, animeId: string) {
-  setBrowsingPresence(`Đang tải dữ liệu: ${animeId}...`, providerName, 'Tải dữ liệu')
+  setBrowsingPresence('Đang tải thông tin phim', providerName, 'Tải dữ liệu')
   const provider = getProvider(providerName)
 
   // Fetch details & episodes
@@ -281,7 +281,7 @@ async function openAnimeMenu(providerName: string, animeId: string) {
   }
 
   while (true) {
-    setBrowsingPresence(`Đang xem thông tin: ${selectedAnime ? selectedAnime.title : animeId}`, providerName, 'Thông tin Phim')
+    setBrowsingPresence('Đang xem thông tin phim', providerName, 'Thông tin Phim', selectedAnime ? selectedAnime.title : animeId)
     clearScreen()
     printBanner(`Provider: ${providerName.toUpperCase()}`, selectedAnime ? selectedAnime.title : animeId)
     if (selectedAnime) drawAnimeCard(selectedAnime)
@@ -386,7 +386,7 @@ async function openAnimeMenu(providerName: string, animeId: string) {
       try {
         setWatchingPresence(selectedAnime.title, episode.title || `Episode ${episode.number}`, providerName)
         await launchPlayer(streamInfo)
-        setBrowsingPresence(`Đang xem thông tin: ${selectedAnime.title}`, providerName, 'Thông tin Phim')
+        setBrowsingPresence('Đang xem thông tin phim', providerName, 'Thông tin Phim', selectedAnime.title)
         printSuccess('\nTrình phát đã đóng.')
         await sleep(500)
       } catch (e) {
