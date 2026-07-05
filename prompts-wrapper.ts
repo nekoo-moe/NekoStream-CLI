@@ -3,6 +3,7 @@ import chalk from 'chalk'
 import readline from 'readline'
 import { glyphs, uiText } from './cli/theme'
 import { padRight, terminalWidth, truncate, visibleLength } from './cli/text'
+import { isDebugModeEnabled } from './logger'
 
 export { Separator }
 
@@ -41,6 +42,14 @@ function formatSeparator(label: string, leadingBreak = true): string {
 
 function promptMessage(message: string): string {
   return `${uiText.title(message)} ${uiText.subtle('(Esc quay lại)')}`
+}
+
+function clearPromptLines(renderedLines: number): boolean {
+  if (renderedLines <= 0 || isDebugModeEnabled()) return false
+  readline.moveCursor(process.stdout, 0, -renderedLines)
+  readline.cursorTo(process.stdout, 0)
+  readline.clearScreenDown(process.stdout)
+  return true
 }
 
 function mapChoices(choices: PromptChoice[], includeBack: boolean) {
@@ -131,11 +140,7 @@ async function selectGrid(options: any, signal: AbortSignal): Promise<unknown> {
   const message = normalizeMessage(options.message || 'Chọn')
 
   const render = () => {
-    if (renderedLines > 0) {
-      readline.moveCursor(process.stdout, 0, -renderedLines)
-      readline.cursorTo(process.stdout, 0)
-      readline.clearScreenDown(process.stdout)
-    }
+    clearPromptLines(renderedLines)
 
     const filtered = filterGridChoices(choices, query)
     const { columnWidth, columns, rows, pageSize } = gridLayout(filtered)
@@ -183,11 +188,7 @@ async function selectGrid(options: any, signal: AbortSignal): Promise<unknown> {
 
     const done = (value: unknown) => {
       cleanup()
-      if (renderedLines > 0) {
-        readline.moveCursor(process.stdout, 0, -renderedLines)
-        readline.cursorTo(process.stdout, 0)
-        readline.clearScreenDown(process.stdout)
-      }
+      clearPromptLines(renderedLines)
       resolve(value)
     }
 

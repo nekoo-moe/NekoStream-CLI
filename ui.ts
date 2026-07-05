@@ -1,7 +1,7 @@
 import chalk from 'chalk'
 import * as fs from 'fs'
 import * as path from 'path'
-import { loadSettings } from './storage'
+import { isDebugModeEnabled } from './logger'
 import type { AnimeDetail } from './scrapers/base'
 import { glyphs, palette, uiText } from './cli/theme'
 import { cleanDescription, cleanInline, padRight, terminalWidth, truncate, visibleLength, wrapText } from './cli/text'
@@ -12,12 +12,7 @@ type StatusItem = {
 }
 
 export function clearScreen() {
-  try {
-    const settings = loadSettings()
-    if (settings.developerMode && process.env.NEKOSTREAM_PRESERVE_LOGS === '1') return
-  } catch {
-    // Storage may not be initialized during early startup.
-  }
+  if (isDebugModeEnabled()) return
 
   process.stdout.write('\x1B[2J\x1B[3J\x1B[H')
   if (process.stdin.isTTY) {

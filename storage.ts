@@ -33,6 +33,7 @@ export interface Settings {
   defaultProvider: string
   defaultQuality: string
   autoPlayNext: boolean
+  debugMode?: boolean
   developerMode?: boolean
   providerDomains?: Record<string, string>
   discordRpcEnabled?: boolean
@@ -42,6 +43,7 @@ const DEFAULT_SETTINGS: Settings = {
   defaultProvider: 'animevietsub',
   defaultQuality: '1080p',
   autoPlayNext: false,
+  debugMode: false,
   developerMode: false,
   providerDomains: {},
   discordRpcEnabled: true

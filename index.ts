@@ -9,6 +9,7 @@ import { launchPlayer } from './player'
 import { clearScreen, printBanner, drawAnimeCard, drawAnimeInfoCard, printEmpty, printError, printStatusStrip, printSuccess, printUpdateNotice } from './ui'
 import { loadSettings, saveSettings, loadHistory, saveHistoryEntry, clearHistory } from './storage'
 import { initDiscord, toggleDiscordPresence, setBrowsingPresence, setWatchingPresence, clearDiscordPresence } from './discord'
+import { debugLog, debugTrace } from './logger'
 import type { AnimeDetail, AnimeSearchResult } from './scrapers/base'
 import {
   getAuthStatus,
@@ -56,11 +57,13 @@ async function showSettingsMenu() {
         { title: `Chất lượng mặc định: ${chalk.green(settings.defaultQuality)}`, value: 'quality' },
         { title: `Tự phát tập tiếp theo: ${formatToggle(settings.autoPlayNext)}`, value: 'autoplay' },
         { title: `Discord RPC: ${formatToggle(settings.discordRpcEnabled)}`, value: 'discord' },
+        { title: `Debug mode: ${formatToggle(settings.debugMode || settings.developerMode)}`, value: 'debug' },
         { title: 'Cấu hình domain provider', value: 'domains' },
         { separator: 'TRỞ VỀ' },
         { title: chalk.gray('Quay lại Home'), value: 'back' }
       ]
     })
+    debugTrace('settings action selected', action)
 
     if (!action || action === 'back') break
 
@@ -92,6 +95,16 @@ async function showSettingsMenu() {
       const nextVal = !settings.discordRpcEnabled
       saveSettings({ discordRpcEnabled: nextVal })
       toggleDiscordPresence(nextVal)
+    }
+
+    if (action === 'debug') {
+      const nextVal = !(settings.debugMode || settings.developerMode)
+      saveSettings({ debugMode: nextVal, developerMode: nextVal })
+      debugLog('debug mode changed', nextVal ? 'enabled' : 'disabled')
+      printSuccess(nextVal
+        ? 'Debug mode đã bật: log debug/trace sẽ hiển thị và CLI sẽ không tự dọn màn hình.'
+        : 'Debug mode đã tắt: CLI sẽ dọn màn hình như bình thường.')
+      await sleep(1000)
     }
 
     if (action === 'domains') {
@@ -630,6 +643,7 @@ async function checkUpdate() {
 async function main() {
   await checkUpdate()
   await initDiscord()
+  debugLog('NekoStream CLI started')
 
   let settings = loadSettings()
   let currentProviderName = settings.defaultProvider
@@ -648,6 +662,7 @@ async function main() {
       { label: 'Tài khoản', value: usernameDisplay },
       { label: 'Provider', value: chalk.green(currentProviderName) }
     ])
+    debugTrace('home rendered', { provider: currentProviderName, loggedIn: authStatus.loggedIn })
 
     const dynamicChoices: any[] = [
       { separator: 'KHÁM PHÁ' },
