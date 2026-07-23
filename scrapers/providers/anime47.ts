@@ -5,6 +5,13 @@ import { enrichWithAniList } from '../anilist'
 import { externalApi } from '../external-api'
 import { getProviderCookieHeader, getProviderToken, loadAuthSession } from '../../storage'
 import { fetchA47Page, interceptA47StreamUrl } from '../auth-service'
+import { cleanSearchQuery, rankSearchResults } from '../search-utils'
+
+type Anime47HtmlOptions = {
+  timeoutMs?: number
+  retries?: number
+  useBrowserFallback?: boolean
+}
 
 type AnimeCachePayload = {
   id: string
@@ -145,9 +152,9 @@ export class Anime47Provider extends BaseScraper {
    * authenticate anime47 SPA HTML pages.
    * Falls back to standard fetch (Bearer header) for unauthenticated or API routes.
    */
-  private async fetchHtml(url: string, options: { timeoutMs?: number; retries?: number } = {}): Promise<string> {
+  private async fetchHtml(url: string, options: Anime47HtmlOptions = {}): Promise<string> {
     const token = getProviderToken('anime47')
-    if (token) {
+    if (token && options.useBrowserFallback !== false) {
       const html = await fetchA47Page(url)
       if (html) return html
       // If Playwright failed (e.g. redirected to login), try standard fetch as last resort
@@ -322,9 +329,9 @@ export class Anime47Provider extends BaseScraper {
 
   private mapStateAnime(item: any): AnimeSearchResult | null {
     if (!item || typeof item !== 'object') return null
-    const link = String(item.link || item.canonical_url || '')
+    const link = String(item.link || item.canonical_url || item.url || '')
     const id = this.normalizeAnimeIdFromLink(link)
-    const title = String(item.title || '').trim()
+    const title = String(item.title || item.name || '').trim()
     if (!id || !title) return null
 
     const rawPoster = String(item.poster || item.thumbnail || item.image || item.images?.poster || '')
@@ -495,32 +502,41 @@ export class Anime47Provider extends BaseScraper {
   }
 
   async search(query: string): Promise<AnimeSearchResult[]> {
-    const q = query.trim()
+    const q = cleanSearchQuery(query)
     if (!q) return []
 
     const merged: AnimeSearchResult[] = []
-    const seen = new Set<string>()
-    const addResult = (item: AnimeSearchResult | null) => {
-      if (!item || !item.id || seen.has(item.id)) return
-      seen.add(item.id)
-      merged.push(item)
-    }
+    const addResults = (items: AnimeSearchResult[]) => merged.push(...items)
+    const hasRelevant = () => rankSearchResults(merged, q, 48).length >= 12
 
-    // Primary path: real Anime47 API used by site frontend
+    // Primary path: real Anime47 API used by site frontend. Keep pages serial
+    // to avoid multiplying load on provider while stopping as soon as useful.
     try {
       for (let page = 1; page <= 3; page++) {
         const apiUrl = `${this.apiBase}/search/full/?lang=vi&keyword=${encodeURIComponent(q)}&page=${page}`
-        const response = await this.fetchJson<{ results?: any[] }>(apiUrl, { retries: 1 })
-        const rows = Array.isArray(response?.results) ? response.results : []
+        const response = await this.fetchJson<{ results?: any[]; data?: any[]; items?: any[] }>(apiUrl, {
+          timeoutMs: 8000,
+          retries: 0
+        })
+        const rows = Array.isArray(response)
+          ? response
+          : Array.isArray(response?.results)
+            ? response.results
+            : Array.isArray(response?.data)
+              ? response.data
+              : Array.isArray(response?.items)
+                ? response.items
+                : []
         if (rows.length === 0) break
-        for (const row of rows) addResult(this.mapStateAnime(row))
+        addResults(rows.map((row) => this.mapStateAnime(row)).filter((item): item is AnimeSearchResult => Boolean(item)))
+        if (hasRelevant()) break
       }
     } catch (error) {
       console.warn('[Anime47] search api failed:', error)
     }
 
-    // Secondary fallback: parse page HTML (only when API returned no results)
-    if (merged.length === 0) {
+    // Secondary fallback: parse page HTML only when API has no relevant hit.
+    if (rankSearchResults(merged, q, 48).length === 0) {
       const urls = [
         `${this.baseUrl}/tim-kiem/${encodeURIComponent(q)}`,
         `${this.baseUrl}/filter?keyword=${encodeURIComponent(q)}`
@@ -528,31 +544,25 @@ export class Anime47Provider extends BaseScraper {
 
       for (const url of urls) {
         try {
-          const html = await this.fetchHtml(url, { retries: 1 })
+          const html = await this.fetchHtml(url, {
+            timeoutMs: 8000,
+            retries: 0,
+            useBrowserFallback: false
+          })
           const state = this.extractInitialState(html)
           const stateResults = this.extractListsFromState(state)
             .flat()
             .map((item) => this.mapStateAnime(item))
             .filter((v): v is AnimeSearchResult => Boolean(v))
-          const htmlResults = this.parseAnimeCardsFromHtml(html)
-
-          for (const item of [...stateResults, ...htmlResults]) addResult(item)
-          if (merged.length > 0) break // stop after first URL that yields results
+          addResults([...stateResults, ...this.parseAnimeCardsFromHtml(html)])
+          if (rankSearchResults(merged, q, 48).length > 0) break
         } catch (error) {
           console.warn('[Anime47] search url failed:', url, error)
         }
       }
     }
 
-    const lowered = q.toLowerCase()
-    const ranked = merged
-      .sort((a, b) => {
-        const aHit = a.title.toLowerCase().includes(lowered) ? 1 : 0
-        const bHit = b.title.toLowerCase().includes(lowered) ? 1 : 0
-        return bHit - aHit
-      })
-      .slice(0, 48)
-    return ranked
+    return rankSearchResults(merged, q, 48)
   }
 
   async getAnimeDetail(id: string): Promise<AnimeDetail | null> {

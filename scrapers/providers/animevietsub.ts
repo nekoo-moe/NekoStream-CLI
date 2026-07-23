@@ -30,6 +30,16 @@ import { enrichWithAniList } from '../anilist'
 import { getProviderCookieHeader } from '../auth-service'
 import { loadAuthSession, loadSettings, saveSettings } from '../../storage'
 import { debugLog, debugWarn } from '../../logger'
+import { cleanSearchQuery, rankSearchResults } from '../search-utils'
+
+type HtmlFetchOptions = {
+  timeoutMs?: number
+  retries?: number
+  useBrowserFallback?: boolean
+  allowDomainFallback?: boolean
+  browserTimeoutMs?: number
+}
+
 // Extended AnimeDetail with additional metadata
 export interface AnimeDetailExtended extends AnimeDetail {
   descriptionVi?: string
@@ -144,7 +154,7 @@ export class AnimeVietsubProvider extends BaseScraper {
 
   private async fetchHtmlFromAlternateDomains(
     originalUrl: string,
-    options: { timeoutMs?: number; retries?: number; useBrowserFallback?: boolean; allowDomainFallback?: boolean }
+    options: HtmlFetchOptions
   ): Promise<string | null> {
     if (!this.isAnimeVietsubUrl(originalUrl)) return null
 
@@ -244,7 +254,7 @@ export class AnimeVietsubProvider extends BaseScraper {
    */
   private async fetchHtml(
     url: string,
-    options: { timeoutMs?: number; retries?: number; useBrowserFallback?: boolean; allowDomainFallback?: boolean } = {}
+    options: HtmlFetchOptions = {}
   ): Promise<string> {
     const timeoutMs = options.timeoutMs ?? 20000
     const retries = options.retries ?? 2
@@ -258,7 +268,7 @@ export class AnimeVietsubProvider extends BaseScraper {
     try { hostname = new URL(url).hostname } catch { /* ignore */ }
     if (hostname && AnimeVietsubProvider.blockedHostCache.has(hostname)) {
       if (!useBrowserFallback) throw new Error(`Lỗi kết nối: host bị chặn (${hostname})`)
-      return await this.fetchHtmlWithPlaywright(url)
+      return await this.fetchHtmlWithPlaywright(url, options.browserTimeoutMs)
     }
 
     let lastError: unknown
@@ -293,7 +303,7 @@ export class AnimeVietsubProvider extends BaseScraper {
           }
           if (useBrowserFallback) {
             debugWarn(`[Scraper] Blocked (${response.status}) after ${consecutiveBlocks} attempt(s), escalating to Playwright for ${url}`)
-            return await this.fetchHtmlWithPlaywright(url)
+            return await this.fetchHtmlWithPlaywright(url, options.browserTimeoutMs)
           }
           throw new Error(`Lỗi kết nối: HTTP ${response.status}`)
         }
@@ -315,7 +325,7 @@ export class AnimeVietsubProvider extends BaseScraper {
           }
           if (useBrowserFallback) {
             debugWarn(`[Scraper] CF challenge persists, escalating to Playwright for ${url}`)
-            return await this.fetchHtmlWithPlaywright(url)
+            return await this.fetchHtmlWithPlaywright(url, options.browserTimeoutMs)
           }
           throw new Error('Lỗi kết nối: Cloudflare challenge không thể vượt qua')
         }
@@ -336,7 +346,7 @@ export class AnimeVietsubProvider extends BaseScraper {
           }
           if (useBrowserFallback) {
             debugWarn(`[Scraper] Block error exhausted retries, escalating to Playwright for ${url}`)
-            return await this.fetchHtmlWithPlaywright(url)
+            return await this.fetchHtmlWithPlaywright(url, options.browserTimeoutMs)
           }
           throw new Error(`Lỗi kết nối: ${(error as Error).message}`)
         }
@@ -392,8 +402,10 @@ export class AnimeVietsubProvider extends BaseScraper {
    * With it (set by the user's normal Electron browser visit), CF treats the
    * Playwright session as a recognized client.
    */
-  private async fetchHtmlWithPlaywright(url: string): Promise<string> {
+  private async fetchHtmlWithPlaywright(url: string, timeoutMs = 35000): Promise<string> {
     const { chromium } = await import('playwright')
+    const deadline = Date.now() + timeoutMs
+    const remainingTime = (ceiling: number) => Math.max(1, Math.min(ceiling, deadline - Date.now()))
 
     // --- Step 1: Pull CF + session cookies from stored session ---
     let playwrightCookies: Array<{
@@ -470,11 +482,11 @@ export class AnimeVietsubProvider extends BaseScraper {
 
     const page = await context.newPage()
     try {
-      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 35000 })
+      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: remainingTime(35000) })
 
       // Wait for CF challenge to pass (if cookies didn't help, it may still loop)
       let cfWaitMs = 0
-      while (cfWaitMs < 20000) {
+      while (cfWaitMs < 20000 && Date.now() < deadline) {
         const title = await page.title().catch(() => '')
         const snippet = await page.content().catch(() => '').then(h => h.slice(0, 2000).toLowerCase())
         if (
@@ -482,8 +494,9 @@ export class AnimeVietsubProvider extends BaseScraper {
           snippet.includes('_cf_chl_opt') ||
           snippet.includes('cf-browser-verification')
         ) {
-          await page.waitForTimeout(1500)
-          cfWaitMs += 1500
+          const waitMs = remainingTime(1500)
+          await page.waitForTimeout(waitMs)
+          cfWaitMs += waitMs
           continue
         }
         break
@@ -491,15 +504,15 @@ export class AnimeVietsubProvider extends BaseScraper {
 
       // Wait for SPA card content to render via AJAX
       try {
-        await page.waitForSelector('a[href*="/phim/"]', { timeout: 12000 })
+        await page.waitForSelector('a[href*="/phim/"]', { timeout: remainingTime(12000) })
       } catch {
         // Scroll to trigger lazy content
         await page.evaluate(() => (globalThis as any).scrollTo(0, (globalThis as any).document.body.scrollHeight / 2))
-        await page.waitForTimeout(2000)
+        if (Date.now() < deadline) await page.waitForTimeout(remainingTime(2000))
       }
 
       // Extra settle time
-      await page.waitForTimeout(1000)
+      if (Date.now() < deadline) await page.waitForTimeout(remainingTime(1000))
       this.rememberWorkingDomain(page.url(), url)
 
       const html = await page.content()
@@ -798,7 +811,7 @@ export class AnimeVietsubProvider extends BaseScraper {
 
       // Only fallback to search when HTML parsed OK but yielded 0 cards (not a 403/down scenario)
       debugWarn('[Scraper] getHomeCards: HTML loaded but 0 cards parsed, trying search fallback')
-      return this.search('anime')
+      return this.searchInternal('anime', true)
     } catch (error) {
       // Site is temporarily down — propagate as a typed error so UI can show proper message
       if (error instanceof SiteDownError) {
@@ -817,49 +830,68 @@ export class AnimeVietsubProvider extends BaseScraper {
     }
   }
 
-  async search(query: string): Promise<AnimeSearchResult[]> {
-    if (!query || query.trim().length === 0) {
-      return []
-    }
+  private parseSearchCards(html: string): AnimeSearchResult[] {
+    if (html.length < 100) return []
+    const $ = this.parseHtml(html)
+    const results: AnimeSearchResult[] = []
+    const seenIds = new Set<string>()
 
-    // Search URL candidates — try each in order until one returns cards
+    this.selectCardElements($).each((_, el) => {
+      const card = this.extractCardData($(el), $)
+      if (!card || seenIds.has(card.id)) return
+      seenIds.add(card.id)
+      results.push(card)
+    })
+
+    return results
+  }
+
+  private async searchInternal(query: string, allowUnmatched = false): Promise<AnimeSearchResult[]> {
+    const normalizedQuery = cleanSearchQuery(query)
+    if (!normalizedQuery) return []
+
     const searchUrls = [
-      `${this.baseUrl}/tim-kiem/${encodeURIComponent(query)}/`,
-      `${this.baseUrl}/?s=${encodeURIComponent(query)}`,
+      `${this.baseUrl}/tim-kiem/${encodeURIComponent(normalizedQuery)}/`,
+      `${this.baseUrl}/?s=${encodeURIComponent(normalizedQuery)}`,
     ]
+    const candidates: AnimeSearchResult[] = []
+    const rawOptions: HtmlFetchOptions = {
+      timeoutMs: 8000,
+      retries: 0,
+      useBrowserFallback: false,
+      allowDomainFallback: false,
+    }
 
     for (const searchUrl of searchUrls) {
       try {
-        // useBrowserFallback: true → 403 after retries auto-escalates to Playwright
-        const html = await this.fetchHtml(searchUrl, { retries: 2, useBrowserFallback: true })
-
-        if (html.length < 100) {
-          continue
-        }
-
-        const $ = this.parseHtml(html)
-
-        const results: AnimeSearchResult[] = []
-        const seenIds = new Set<string>()
-        this.selectCardElements($).each((_, el) => {
-          const card = this.extractCardData($(el), $)
-          if (!card || seenIds.has(card.id)) return
-          seenIds.add(card.id)
-          results.push(card)
-        })
-
-        if (results.length > 0) {
-          return results.slice(0, 24)
-        }
-
+        const html = await this.fetchHtml(searchUrl, rawOptions)
+        candidates.push(...this.parseSearchCards(html))
+        const ranked = rankSearchResults(candidates, normalizedQuery, 24)
+        if (ranked.length >= 12) return ranked
       } catch (error) {
-        // Site down — re-throw immediately, don't try other URLs
         if (error instanceof SiteDownError) throw error
         debugWarn('[Scraper] Search attempt failed for', searchUrl, error)
       }
     }
 
-    return []
+    // One direct browser attempt handles pages that require rendering, without
+    // another native request or alternate-domain fan-out.
+    if (rankSearchResults(candidates, normalizedQuery, 24).length === 0) {
+      try {
+        const html = await this.fetchHtmlWithPlaywright(searchUrls[0], 20000)
+        candidates.push(...this.parseSearchCards(html))
+      } catch (error) {
+        if (error instanceof SiteDownError) throw error
+        debugWarn('[Scraper] Search browser fallback failed for', searchUrls[0], error)
+      }
+    }
+
+    const ranked = rankSearchResults(candidates, normalizedQuery, 24)
+    return ranked.length > 0 || !allowUnmatched ? ranked : candidates.slice(0, 24)
+  }
+
+  async search(query: string): Promise<AnimeSearchResult[]> {
+    return this.searchInternal(query)
   }
 
   async getAnimeDetail(id: string): Promise<AnimeDetailExtended | null> {
