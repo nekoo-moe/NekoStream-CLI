@@ -58,14 +58,6 @@ Chạy bản development:
 npm start
 ```
 
-Build TypeScript:
-
-```bash
-npm run build
-```
-
-Trước khi publish, hãy đảm bảo `version` trong `package.json` và `package-lock.json` đã khớp nhau.
-
 ## Gỡ lỗi
 
 Mặc định CLI ẩn log scraper/debug để giao diện terminal sạch hơn.
