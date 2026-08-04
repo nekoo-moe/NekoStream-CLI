@@ -7,12 +7,14 @@ import { isDebugModeEnabled } from './logger'
 
 export { Separator }
 
-type PromptChoice = {
+export type PromptChoice<T = unknown> = {
   title?: string
-  value?: unknown
+  value?: T
   description?: string
   separator?: string
 }
+
+export type PromptResult<Name extends string, Value> = Partial<Record<Name, Value>>
 
 type GridChoice = {
   name: string
@@ -267,7 +269,9 @@ async function selectGrid(options: any, signal: AbortSignal): Promise<unknown> {
   })
 }
 
-export default async function prompts(options: any): Promise<any> {
+export default async function prompts<Name extends string, Value>(
+  options: any
+): Promise<PromptResult<Name, Value>> {
   const ac = new AbortController()
 
   if (process.stdin.isTTY) {
@@ -287,7 +291,7 @@ export default async function prompts(options: any): Promise<any> {
   try {
     if (options.type === 'grid') {
       const result = await selectGrid(options, ac.signal)
-      return result ? { [options.name]: result } : {}
+      return result ? { [options.name]: result } as PromptResult<Name, Value> : {}
     }
 
     if (options.type === 'select') {
@@ -316,7 +320,7 @@ export default async function prompts(options: any): Promise<any> {
       }, { signal: ac.signal, clearPromptOnDone: true } as any)
 
       if (result === '__GOBACK__') return {}
-      return { [options.name]: result }
+      return { [options.name]: result } as PromptResult<Name, Value>
     }
 
     if (options.type === 'search') {
@@ -351,7 +355,7 @@ export default async function prompts(options: any): Promise<any> {
       }, { signal: ac.signal, clearPromptOnDone: true } as any)
 
       if (result === '__GOBACK__') return {}
-      return { [options.name]: result }
+      return { [options.name]: result } as PromptResult<Name, Value>
     }
 
     if (options.type === 'text') {
@@ -360,7 +364,7 @@ export default async function prompts(options: any): Promise<any> {
         default: options.initial
       }, { signal: ac.signal, clearPromptOnDone: true } as any)
 
-      return { [options.name]: result }
+      return { [options.name]: result } as PromptResult<Name, Value>
     }
 
     if (options.type === 'confirm') {
@@ -369,7 +373,7 @@ export default async function prompts(options: any): Promise<any> {
         default: options.initial
       }, { signal: ac.signal, clearPromptOnDone: true } as any)
 
-      return { [options.name]: result }
+      return { [options.name]: result } as PromptResult<Name, Value>
     }
   } catch (err: any) {
     if (err.name === 'ExitPromptError' || err.name === 'AbortPromptError' || err.message === 'ESC_PRESSED') {

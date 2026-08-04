@@ -2,6 +2,7 @@ import fs from 'fs'
 import path from 'path'
 import crypto from 'crypto'
 import os from 'os'
+import { isProviderId, type ProviderId } from './provider-types'
 
 const OLD_DATA_DIR = path.join(__dirname, '.data')
 const DATA_DIR = path.join(os.homedir(), '.nekostream-cli')
@@ -21,7 +22,7 @@ if (!fs.existsSync(DATA_DIR)) {
 }
 
 export interface HistoryEntry {
-  provider: string
+  provider: ProviderId
   animeId: string
   animeTitle: string
   episodeId: string
@@ -30,12 +31,12 @@ export interface HistoryEntry {
 }
 
 export interface Settings {
-  defaultProvider: string
+  defaultProvider: ProviderId
   defaultQuality: string
   autoPlayNext: boolean
   debugMode?: boolean
   developerMode?: boolean
-  providerDomains?: Record<string, string>
+  providerDomains?: Partial<Record<ProviderId, string>>
   discordRpcEnabled?: boolean
 }
 
@@ -69,7 +70,7 @@ export function saveSettings(settings: Partial<Settings>) {
   fs.writeFileSync(SETTINGS_FILE, JSON.stringify(updated, null, 2), 'utf-8')
 }
 
-const PROVIDER_DEFAULT_DOMAINS: Record<string, string> = {
+const PROVIDER_DEFAULT_DOMAINS: Record<ProviderId, string> = {
   animevietsub: 'https://animevietsub.site',
   anime47: 'https://anime47.best',
   animehay: 'https://animehay.ink'
@@ -79,14 +80,14 @@ const PROVIDER_DEFAULT_DOMAINS: Record<string, string> = {
  * Returns the base URL for a provider, respecting custom domain settings.
  * Mirrors the domain injection logic in providers.ts getProvider().
  */
-export function getProviderBaseUrl(providerName: string): string {
+export function getProviderBaseUrl(providerName: ProviderId): string {
   const settings = loadSettings()
   const custom = settings.providerDomains?.[providerName]
   if (custom && custom.trim()) {
     const d = custom.trim()
     return (d.startsWith('http') ? d : 'https://' + d).replace(/\/$/, '')
   }
-  return PROVIDER_DEFAULT_DOMAINS[providerName] ?? `https://${providerName}.com`
+  return PROVIDER_DEFAULT_DOMAINS[providerName]
 }
 
 // ── History ──────────────────────────────────────────────────────────────────
@@ -138,7 +139,7 @@ export interface StoredCookie {
 }
 
 export interface AuthSession {
-  provider: string
+  provider: ProviderId
   cookies: StoredCookie[]
   capturedAt: string
   source: 'interactive-login' | 'manual'
@@ -152,7 +153,7 @@ export interface AuthSession {
   localStorageState?: Record<string, string>
 }
 
-type AuthSessionsMap = Record<string, AuthSession>
+type AuthSessionsMap = Partial<Record<ProviderId, AuthSession>>
 
 /**
  * Derive a stable 32-byte encryption key from machine identity.
@@ -201,6 +202,7 @@ function loadAuthSessionsRaw(): AuthSessionsMap {
       const parsed = JSON.parse(raw) as Record<string, string>
       const result: AuthSessionsMap = {}
       for (const [provider, encoded] of Object.entries(parsed)) {
+        if (!isProviderId(provider)) continue
         const decrypted = decryptPayload(encoded)
         if (!decrypted) continue
         result[provider] = JSON.parse(decrypted) as AuthSession
@@ -221,18 +223,18 @@ function saveAuthSessionsRaw(sessions: AuthSessionsMap): void {
   fs.writeFileSync(AUTH_SESSIONS_FILE, JSON.stringify(encoded, null, 2), 'utf-8')
 }
 
-export function loadAuthSession(provider: string): AuthSession | null {
+export function loadAuthSession(provider: ProviderId): AuthSession | null {
   const sessions = loadAuthSessionsRaw()
   return sessions[provider] ?? null
 }
 
-export function saveAuthSession(provider: string, session: AuthSession): void {
+export function saveAuthSession(provider: ProviderId, session: AuthSession): void {
   const sessions = loadAuthSessionsRaw()
   sessions[provider] = { ...session, provider }
   saveAuthSessionsRaw(sessions)
 }
 
-export function clearAuthSession(provider: string): void {
+export function clearAuthSession(provider: ProviderId): void {
   const sessions = loadAuthSessionsRaw()
   delete sessions[provider]
   saveAuthSessionsRaw(sessions)
@@ -242,7 +244,7 @@ export function clearAuthSession(provider: string): void {
  * Build Cookie header string from stored session.
  * Filters out expired cookies.
  */
-export function getProviderCookieHeader(provider: string): string | null {
+export function getProviderCookieHeader(provider: ProviderId): string | null {
   const session = loadAuthSession(provider)
   if (!session) return null
 
@@ -259,7 +261,7 @@ export function getProviderCookieHeader(provider: string): string | null {
 /**
  * Returns stored JWT access token for providers that use Bearer auth (e.g. Anime47).
  */
-export function getProviderToken(provider: string): string | null {
+export function getProviderToken(provider: ProviderId): string | null {
   const session = loadAuthSession(provider)
   return session?.accessToken ?? null
 }

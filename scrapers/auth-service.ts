@@ -5,11 +5,12 @@
  */
 
 import { loadAuthSession, saveAuthSession, clearAuthSession, getProviderCookieHeader, getProviderBaseUrl, type StoredCookie, type AuthSession } from '../storage'
+import type { AccountProviderId } from '../provider-types'
 
 // ── Shared Types ──────────────────────────────────────────────────────────────
 
 export interface ProviderAuthStatus {
-  provider: string
+  provider: AccountProviderId
   loggedIn: boolean
   cookieCount: number
   hasAuthLikeCookie: boolean
@@ -206,7 +207,7 @@ async function applyAdBlockingToPage(page: import('playwright').Page): Promise<v
   }
 }
 
-export function getAuthStatus(provider: string): ProviderAuthStatus {
+export function getAuthStatus(provider: AccountProviderId): ProviderAuthStatus {
   const session = loadAuthSession(provider)
   if (!session) return { provider, loggedIn: false, cookieCount: 0, hasAuthLikeCookie: false }
 
@@ -225,7 +226,7 @@ export function getAuthStatus(provider: string): ProviderAuthStatus {
   }
 }
 
-export function logoutProvider(provider: string): void {
+export function logoutProvider(provider: AccountProviderId): void {
   clearAuthSession(provider)
 }
 
@@ -343,7 +344,6 @@ function toAbsoluteAvsUrl(raw: string): string {
  */
 function parseAvsAnimeList(html: string): UserDataItem[] {
   // Lazy-load cheerio only when needed (it's already a dep in animevietsub.ts)
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
   const cheerio = require('cheerio') as typeof import('cheerio')
   const $ = cheerio.load(html)
   const items: UserDataItem[] = []
