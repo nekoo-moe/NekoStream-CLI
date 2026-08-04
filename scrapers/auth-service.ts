@@ -4,7 +4,8 @@
  * Uses Playwright headful (visible browser) instead of Electron BrowserWindow.
  */
 
-import { loadAuthSession, saveAuthSession, clearAuthSession, getProviderCookieHeader, getProviderBaseUrl, type StoredCookie, type AuthSession } from '../storage'
+import { loadAuthSession, saveAuthSession, clearAuthSession, getProviderCookieHeader, type StoredCookie, type AuthSession } from '../storage'
+import { getAlternateBaseUrls, getProviderBaseUrl } from './domain-resolver'
 import type { AccountProviderId } from '../provider-types'
 
 // ── Shared Types ──────────────────────────────────────────────────────────────
@@ -763,10 +764,10 @@ export async function fetchAnimeVietsubList(listType: 'favorites' | 'history' | 
   const session = loadAuthSession('animevietsub')
   if (!session) return { success: false, authenticated: false, items: [], error: 'Chưa đăng nhập AnimeVietsub' }
 
+  // Candidates come from the domain registry rather than a hardcoded
+  // `.site` rewrite, which pinned the fallback to one TLD forever.
   const base = getProviderBaseUrl('animevietsub')
-  // Ensure we always try the canonical .site domain as well
-  const altBase = base.replace(/animevietsub\.[a-z]+$/i, 'animevietsub.site')
-  const bases = base === altBase ? [base] : [base, altBase]
+  const bases = [base, ...getAlternateBaseUrls('animevietsub')]
 
   // Each list type maps to one or more URL paths to try in order.
   // The history page (/lich-su/) groups entries into Hôm nay / Tuần này / Cũ hơn.
@@ -817,8 +818,7 @@ export async function fetchAnimeVietsubNotifications(page = 1): Promise<UserData
   if (!session) return { success: false, authenticated: false, items: [], error: 'Chưa đăng nhập AnimeVietsub' }
 
   const base = getProviderBaseUrl('animevietsub')
-  const altBase = base.replace(/animevietsub\.[a-z]+$/i, 'animevietsub.site')
-  const bases = base === altBase ? [base] : [base, altBase]
+  const bases = [base, ...getAlternateBaseUrls('animevietsub')]
 
   // AVS uses /account/info/?tab=thongbao for notifications tab
   for (const b of bases) {

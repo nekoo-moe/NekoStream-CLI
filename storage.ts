@@ -3,6 +3,10 @@ import path from 'path'
 import crypto from 'crypto'
 import os from 'os'
 import { isProviderId, type ProviderId } from './provider-types'
+// Registry only — it is pure and imports nothing from here, so this direction is
+// safe. The resolver (which does read settings) must not be imported from this
+// file or the cycle comes back.
+import { seedBaseUrl } from './scrapers/domain-registry'
 
 const OLD_DATA_DIR = path.join(__dirname, '.data')
 const DATA_DIR = path.join(os.homedir(), '.nekostream-cli')
@@ -36,6 +40,12 @@ export interface Settings {
   autoPlayNext: boolean
   debugMode?: boolean
   developerMode?: boolean
+  /**
+   * Manual domain overrides — written by the user in Settings and by nothing
+   * else. The domain prober keeps its findings in `domain-cache.json` precisely
+   * so that it cannot overwrite a choice made here; an entry in this map wins
+   * over any probe result. See scrapers/domain-resolver.ts.
+   */
   providerDomains?: Partial<Record<ProviderId, string>>
   discordRpcEnabled?: boolean
 }
@@ -70,24 +80,21 @@ export function saveSettings(settings: Partial<Settings>) {
   fs.writeFileSync(SETTINGS_FILE, JSON.stringify(updated, null, 2), 'utf-8')
 }
 
-const PROVIDER_DEFAULT_DOMAINS: Record<ProviderId, string> = {
-  animevietsub: 'https://animevietsub.site',
-  anime47: 'https://anime47.best',
-  animehay: 'https://animehay.ink'
-}
-
 /**
- * Returns the base URL for a provider, respecting custom domain settings.
- * Mirrors the domain injection logic in providers.ts getProvider().
+ * Fallback domains used when nothing has been probed yet.
+ *
+ * The two probed providers derive theirs from the domain registry so there is
+ * exactly one place that names a domain — this file and the provider classes
+ * used to disagree with each other (animehay.ink here vs animehay01.site in the
+ * provider). AnimeHay is not probed, so its value stays literal.
+ *
+ * Resolution itself lives in scrapers/domain-resolver.ts; this is only the
+ * starting point. Nothing in this file writes providerDomains.
  */
-export function getProviderBaseUrl(providerName: ProviderId): string {
-  const settings = loadSettings()
-  const custom = settings.providerDomains?.[providerName]
-  if (custom && custom.trim()) {
-    const d = custom.trim()
-    return (d.startsWith('http') ? d : 'https://' + d).replace(/\/$/, '')
-  }
-  return PROVIDER_DEFAULT_DOMAINS[providerName]
+export const PROVIDER_DEFAULT_DOMAINS: Record<ProviderId, string> = {
+  animevietsub: seedBaseUrl('animevietsub'),
+  anime47: seedBaseUrl('anime47'),
+  animehay: 'https://animehay.ink'
 }
 
 // ── History ──────────────────────────────────────────────────────────────────

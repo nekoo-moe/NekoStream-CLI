@@ -1,6 +1,7 @@
 import { AnimeVietsubProvider } from './scrapers/providers/animevietsub'
 import { Anime47Provider } from './scrapers/providers/anime47'
 import { AnimehayProvider } from './scrapers/providers/animehay'
+import { getProviderBaseUrl } from './scrapers/domain-resolver'
 import type { BaseScraper } from './scrapers/base'
 import { isProviderId, type ProviderId } from './provider-types'
 
@@ -10,6 +11,18 @@ export const providers: Record<ProviderId, BaseScraper> = {
   animehay: new AnimehayProvider()
 }
 
+/**
+ * Resolve a provider and point it at the base URL currently in effect.
+ *
+ * The base URL is re-applied on every call because it can change mid-session: a
+ * startup probe or a successful retry on an alternate domain updates the
+ * resolver, and these provider instances are long-lived singletons.
+ *
+ * This used to `require('./storage')` lazily inside a try/catch to dodge an
+ * import cycle, and swallowed whatever went wrong. Splitting the pure registry
+ * from the stateful resolver removes the cycle, so the import is static and
+ * failures are no longer hidden.
+ */
 export function getProvider(name: ProviderId | string): BaseScraper {
   const providerName = name.toLowerCase()
   if (!isProviderId(providerName)) {
@@ -17,19 +30,6 @@ export function getProvider(name: ProviderId | string): BaseScraper {
   }
 
   const provider = providers[providerName]
-  // Inject custom domain if configured
-  try {
-    const { loadSettings } = require('./storage')
-    const settings = loadSettings()
-    if (settings.providerDomains && settings.providerDomains[providerName]) {
-      let customDomain = settings.providerDomains[providerName]
-      if (!customDomain.startsWith('http')) customDomain = 'https://' + customDomain
-      // Remove trailing slash
-      provider.baseUrl = customDomain.replace(/\/$/, '')
-    }
-  } catch (e) {
-    // Ignore storage errors here to avoid breaking provider resolution
-  }
-
+  provider.baseUrl = getProviderBaseUrl(providerName)
   return provider
 }

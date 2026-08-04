@@ -6,6 +6,8 @@ import { externalApi } from '../external-api'
 import { getProviderCookieHeader, getProviderToken, loadAuthSession } from '../../storage'
 import { fetchA47Page, interceptA47StreamUrl } from '../auth-service'
 import { cleanSearchQuery, rankSearchResults } from '../search-utils'
+import { getResolvedBaseUrl } from '../domain-resolver'
+import { PROVIDER_DOMAIN_SPECS } from '../domain-registry'
 
 type Anime47HtmlOptions = {
   timeoutMs?: number
@@ -80,10 +82,17 @@ interface Anime47WatchApiResponse {
 
 export class Anime47Provider extends BaseScraper {
   name = 'anime47'
-  baseUrl = 'https://anime47.best'
-  
+  baseUrl = getResolvedBaseUrl('anime47')
+
+  /**
+   * Anime47 serves its site and its JSON API from different TLDs. The mapping
+   * lives in the domain registry as data (`apiTld`) rather than as a regex
+   * rewriting whatever TLD happens to be current.
+   */
   private get apiBase() {
-    return this.baseUrl.replace(/\.[a-z]+$/, '.love') + '/api'
+    const spec = PROVIDER_DOMAIN_SPECS.anime47
+    const apiTld = spec.apiTld ?? spec.tlds[0]
+    return `https://${spec.label}.${apiTld}/api`
   }
 
   private get headers() {

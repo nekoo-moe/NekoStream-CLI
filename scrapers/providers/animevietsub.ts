@@ -28,7 +28,13 @@ import { extractVideoFromJS, fetchM3U8 } from '../interceptor'
 import { externalApi } from '../external-api'
 import { enrichWithAniList } from '../anilist'
 import { getProviderCookieHeader } from '../auth-service'
-import { loadAuthSession, loadSettings, saveSettings } from '../../storage'
+import { loadAuthSession } from '../../storage'
+import {
+  getAlternateBaseUrls,
+  getResolvedBaseUrl,
+  rememberVerifiedDomain,
+} from '../domain-resolver'
+import { PROVIDER_DOMAIN_SPECS, matchesLabel, verifyProviderHtml } from '../domain-registry'
 import { debugLog, debugWarn } from '../../logger'
 import { cleanSearchQuery, rankSearchResults } from '../search-utils'
 
@@ -68,14 +74,7 @@ export interface AnimeDetailExtended extends AnimeDetail {
 
 export class AnimeVietsubProvider extends BaseScraper {
   name = 'AnimeVietsub'
-  baseUrl = 'https://animevietsub.site'
-  private static readonly knownBaseUrls = [
-    'https://animevietsub.love',
-    'https://animevietsub.site',
-    'https://animevietsub.fan',
-    'https://animevietsub.bz',
-    'https://animevietsub.tv'
-  ]
+  baseUrl = getResolvedBaseUrl('animevietsub')
 
   // Stable Chrome 124 profile to align with the player's webview user agent
   private stableProfile = {
@@ -97,41 +96,37 @@ export class AnimeVietsubProvider extends BaseScraper {
     return nameOrSource?.trim() || 'Server'
   }
 
-  private normalizeBaseUrl(value: string): string {
-    const url = value.startsWith('http') ? value : `https://${value}`
-    return url.replace(/\/$/, '')
-  }
-
-  private isAnimeVietsubUrl(value: string): boolean {
-    try {
-      return new URL(value).hostname.toLowerCase().includes('animevietsub')
-    } catch {
-      return false
-    }
-  }
-
+  /**
+   * Record a domain that a real request just proved works.
+   *
+   * The old version wrote straight into `settings.providerDomains`, which is
+   * also where the user's manual override lives — so a redirect could silently
+   * replace a domain the user had chosen deliberately, permanently and with no
+   * TTL to recover from. The resolver keeps probe results in a separate cache
+   * and refuses to touch a manual override.
+   */
   private rememberWorkingDomain(finalUrl: string, sourceUrl?: string): void {
-    if (!this.isAnimeVietsubUrl(finalUrl)) return
-
-    const finalBaseUrl = new URL(finalUrl).origin
-    const currentBaseUrl = this.normalizeBaseUrl(this.baseUrl)
-    if (finalBaseUrl === currentBaseUrl) return
-
-    this.baseUrl = finalBaseUrl
+    let origin: string
+    let hostname: string
     try {
-      const settings = loadSettings()
-      saveSettings({
-        providerDomains: {
-          ...(settings.providerDomains || {}),
-          animevietsub: finalBaseUrl
-        }
-      })
-      debugLog(`[AnimeVietsub] Domain updated: ${sourceUrl || currentBaseUrl} -> ${finalBaseUrl}`)
-    } catch (error) {
-      debugWarn('[AnimeVietsub] Could not save discovered domain:', error)
+      const parsed = new URL(finalUrl)
+      origin = parsed.origin
+      hostname = parsed.hostname
+    } catch {
+      return
     }
+    // Registrable-label match, not `hostname.includes('animevietsub')`: this
+    // decides which origin gets our session cookies and is written to disk.
+    if (!matchesLabel(hostname, PROVIDER_DOMAIN_SPECS.animevietsub.label)) return
+    if (origin === this.baseUrl) return
+
+    const previous = this.baseUrl
+    this.baseUrl = origin
+    rememberVerifiedDomain('animevietsub', origin)
+    debugLog(`[AnimeVietsub] Domain updated: ${sourceUrl || previous} -> ${origin}`)
   }
 
+  /** Same path on every other candidate domain, current one excluded. */
   private getAlternateUrls(originalUrl: string): string[] {
     let parsed: URL
     try {
@@ -139,24 +134,32 @@ export class AnimeVietsubProvider extends BaseScraper {
     } catch {
       return []
     }
-
-    const path = `${parsed.pathname}${parsed.search}`
-    const currentBaseUrl = this.normalizeBaseUrl(this.baseUrl)
-    const candidates = [
-      currentBaseUrl,
-      ...AnimeVietsubProvider.knownBaseUrls.map((url) => this.normalizeBaseUrl(url))
-    ]
-
-    return [...new Set(candidates)]
+    const suffix = `${parsed.pathname}${parsed.search}`
+    return getAlternateBaseUrls('animevietsub')
       .filter((baseUrl) => baseUrl !== parsed.origin)
-      .map((baseUrl) => `${baseUrl}${path}`)
+      .map((baseUrl) => `${baseUrl}${suffix}`)
   }
 
+  /**
+   * Retry a failed request against the provider's other domains.
+   *
+   * The returned HTML is verified before the domain is adopted. Previously any
+   * response that did not throw counted as success, so a parking page, a
+   * squatter or an ISP block page answering HTTP 200 was enough to have its
+   * domain written to settings as "working" — and then every later request went
+   * there. Verification is what makes adoption safe.
+   */
   private async fetchHtmlFromAlternateDomains(
     originalUrl: string,
     options: HtmlFetchOptions
   ): Promise<string | null> {
-    if (!this.isAnimeVietsubUrl(originalUrl)) return null
+    let hostname: string
+    try {
+      hostname = new URL(originalUrl).hostname
+    } catch {
+      return null
+    }
+    if (!matchesLabel(hostname, PROVIDER_DOMAIN_SPECS.animevietsub.label)) return null
 
     for (const alternateUrl of this.getAlternateUrls(originalUrl)) {
       try {
@@ -166,6 +169,13 @@ export class AnimeVietsubProvider extends BaseScraper {
           retries: 0,
           allowDomainFallback: false
         })
+
+        const verified = verifyProviderHtml(html, PROVIDER_DOMAIN_SPECS.animevietsub)
+        if (!verified.ok) {
+          debugWarn(`[AnimeVietsub] Alternate domain rejected: ${alternateUrl} — ${verified.reason}`)
+          continue
+        }
+
         this.rememberWorkingDomain(alternateUrl, originalUrl)
         return html
       } catch (error) {

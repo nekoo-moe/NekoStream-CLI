@@ -15,7 +15,7 @@ export type SettingsAction =
   | 'domains'
   | 'back'
 
-export type DomainAction = ProviderId | 'reset' | 'back'
+export type DomainAction = ProviderId | 'redetect' | 'reset' | 'back'
 
 export type AnimeVietsubListAction = 'favorites' | 'history'
 export type Anime47ListAction =

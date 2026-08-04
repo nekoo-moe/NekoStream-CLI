@@ -27,7 +27,7 @@
     "clean": "node scripts/clean.mjs",
     "build": "npm run clean && tsc",
     "typecheck": "tsc --noEmit",
-    "test": "tsx checks/search-check.mts && tsx checks/parser-check.mts",
+    "test": "tsx checks/search-check.mts && tsx checks/parser-check.mts && tsx checks/domain-check.mts",
     "lint": "eslint . --max-warnings 0",
     "format": "prettier --write .",
     "format:check": "prettier --check .",

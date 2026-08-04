@@ -1,17 +1,23 @@
 import chalk from 'chalk'
+import ora from 'ora'
 import prompts, { type PromptChoice } from '../../prompts-wrapper'
-import { providers } from '../../providers'
 import {
   PROVIDER_IDS,
   type DomainAction,
   type ProviderId,
   type SettingsAction,
 } from '../../provider-types'
-import { clearScreen, printBanner, printSuccess } from '../../ui'
+import { clearScreen, printBanner, printHint, printSuccess } from '../../ui'
 import { loadSettings, saveSettings } from '../../storage'
+import {
+  clearDomainCache,
+  getProviderDomainInfo,
+  resolveAllDomains,
+  type ResolvedDomain,
+} from '../../scrapers/domain-resolver'
 import { setBrowsingPresence, toggleDiscordPresence } from '../../discord'
 import { debugLog, debugTrace } from '../../logger'
-import { CONFIRM_DELAY_MS, formatToggle, sleep } from '../feedback'
+import { CONFIRM_DELAY_MS, NOTICE_DELAY_MS, formatToggle, sleep } from '../feedback'
 
 const QUALITY_OPTIONS = ['1080p', '720p', '480p', 'auto'] as const
 
@@ -66,6 +72,73 @@ async function editProviderDomain(provider: ProviderId, currentDomain?: string):
   saveSettings({ providerDomains: domains })
 }
 
+/** Short local timestamp for the "verified at" hint; falls back to nothing. */
+function formatVerifiedAt(iso?: string): string {
+  if (!iso) return ''
+  const at = new Date(iso)
+  if (Number.isNaN(at.getTime())) return ''
+  return at.toLocaleString('vi-VN', {
+    day: '2-digit',
+    month: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
+/**
+ * Render one provider's domain with its provenance.
+ *
+ * Showing the source is the visible half of separating manual overrides from
+ * probe results: the old menu printed the same green value whether the user had
+ * typed it or the retry path had silently written it into settings.
+ */
+function describeDomain(info: ResolvedDomain): string {
+  switch (info.source) {
+    case 'manual':
+      return `${chalk.green(info.baseUrl)} ${chalk.gray('(thủ công)')}`
+    case 'verified': {
+      const at = formatVerifiedAt(info.verifiedAt)
+      return `${chalk.cyan(info.baseUrl)} ${chalk.gray(at ? `(tự dò ${at})` : '(tự dò)')}`
+    }
+    case 'seed':
+      return `${chalk.gray(info.baseUrl)} ${chalk.gray('(mặc định)')}`
+  }
+}
+
+/** Re-run the prober on demand, ignoring whatever is cached. */
+async function redetectDomains(): Promise<void> {
+  const settings = loadSettings()
+  const pinned = PROVIDER_IDS.filter((name) => settings.providerDomains?.[name]?.trim())
+
+  // Wiping the cache first is what makes this a real re-detect rather than a
+  // re-confirm: otherwise the fast path just re-verifies the cached domain and
+  // never reconsiders an earlier TLD that has since come back.
+  clearDomainCache()
+
+  const spinner = ora('Đang dò lại domain provider...').start()
+  const outcomes = await resolveAllDomains()
+  spinner.stop()
+
+  const found = outcomes.filter((outcome) => outcome.status === 'ok')
+  const failed = outcomes.filter((outcome) => outcome.status === 'failed')
+
+  for (const outcome of found) {
+    printSuccess(`${outcome.provider}: ${outcome.baseUrl}`)
+  }
+  for (const outcome of failed) {
+    printHint(
+      `${outcome.provider}: không tìm được domain hợp lệ (đã thử ${outcome.tried}). Giữ ${outcome.baseUrl}.`
+    )
+  }
+  if (pinned.length > 0) {
+    printHint(
+      `Bỏ qua ${pinned.join(', ')} vì đang đặt domain thủ công — xoá domain thủ công để cho phép tự dò.`
+    )
+  }
+
+  await sleep(NOTICE_DELAY_MS)
+}
+
 async function showDomainMenu(): Promise<void> {
   while (true) {
     clearScreen()
@@ -73,15 +146,12 @@ async function showDomainMenu(): Promise<void> {
 
     const currentDomains = loadSettings().providerDomains || {}
 
-    const choices: PromptChoice<DomainAction>[] = PROVIDER_IDS.map((name) => {
-      const custom = currentDomains[name]
-      const domain = custom || providers[name].baseUrl
-      return {
-        title: `${chalk.bold(name)}: ${custom ? chalk.green(domain) : chalk.gray(domain)}`,
-        value: name,
-      }
-    })
+    const choices: PromptChoice<DomainAction>[] = PROVIDER_IDS.map((name) => ({
+      title: `${chalk.bold(name)}: ${describeDomain(getProviderDomainInfo(name))}`,
+      value: name,
+    }))
 
+    choices.push({ title: chalk.cyan('Dò lại domain ngay'), value: 'redetect' })
     choices.push({ title: chalk.red('Đặt lại tất cả domain mặc định'), value: 'reset' })
     choices.push({ title: chalk.gray('Quay lại Cài đặt'), value: 'back' })
 
@@ -94,8 +164,16 @@ async function showDomainMenu(): Promise<void> {
 
     if (!selectedProvider || selectedProvider === 'back') return
 
+    if (selectedProvider === 'redetect') {
+      await redetectDomains()
+      continue
+    }
+
     if (selectedProvider === 'reset') {
+      // Clear both stores, otherwise "reset to default" would leave the last
+      // probed domain in place and look like it had done nothing.
       saveSettings({ providerDomains: {} })
+      clearDomainCache()
       printSuccess('Đã đặt lại tất cả domain về mặc định.')
       await sleep(CONFIRM_DELAY_MS)
       continue
