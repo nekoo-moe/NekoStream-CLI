@@ -120,7 +120,15 @@ Tách API types, client, parser và stream extractor khỏi provider class.
 
 #### AnimeHay
 
-Dùng làm provider thử nghiệm đầu tiên vì nhỏ nhất. Sửa identifier `configureAnimehаyCacheHooks` có ký tự Cyrillic thành tên Latin chuẩn.
+Đã quyết định **abandon**: giữ code cho provider vẫn chạy được, nhưng ngừng đầu tư.
+
+- Không viết fixture test.
+- Không refactor trong Phase 3/4.
+- 676 dòng trong `scrapers/providers/animehay.ts` được giữ nguyên tại chỗ.
+- Tồn đọng đã biết, chấp nhận không sửa: `storage.ts` khai báo domain `https://animehay.ink` còn `scrapers/providers/animehay.ts` khai báo `https://animehay01.site` — hai nguồn sự thật khác nhau cho cùng một provider.
+- Tồn đọng đã biết: identifier `configureAnimehаyCacheHooks` có ký tự Cyrillic trong tên.
+
+Trước đây AnimeHay được chọn làm provider refactor đầu tiên vì nhỏ nhất. Quyết định này **thay thế** kế hoạch đó.
 
 ### P1 — Auth subsystem
 
@@ -234,7 +242,7 @@ CLI presenter chịu trách nhiệm chuyển lỗi thành thông báo người d
 ### P2 — Test strategy
 
 1. Unit test utility thuần.
-2. HTML fixture tests cho parser từng provider.
+2. HTML fixture tests cho parser từng provider. **Đã làm ở Phase 2.5** cho AnimeVietsub và Anime47; AnimeHay bỏ qua theo quyết định abandon.
 3. Provider contract tests.
 4. Package smoke test sau build.
 5. Player policy tests cho payload, host allowlist, cookie và IPC.
@@ -346,6 +354,46 @@ cli/
 
 - Logic fetch danh sách provider và luồng đăng nhập trước đây bị lặp giữa account menu và home menu, nay dùng chung qua `flows/provider-lists.ts` và `flows/auth-flow.ts`.
 
+### Phase 2.5 — Fixture test cho parser
+
+Nguyên tắc của kế hoạch là "viết test cho parser trước khi di chuyển logic provider", nhưng roadmap ban đầu không có bước nào thực hiện việc đó. Phase này lấp chỗ trống và là điều kiện tiên quyết của Phase 3/4.
+
+- [x] Thêm `checks/capture-fixtures.mts` — tool dev-only, chạy tay, hit site thật để lấy HTML.
+- [x] Commit HTML fixture để test chạy offline.
+- [x] Thêm `checks/parser-check.mts` — test parser hoàn toàn offline.
+- [x] Nối `parser-check` vào `npm test`.
+- [x] Xác minh test thật sự fail khi parser hỏng (mutation check bằng trang rỗng).
+
+Fixture hiện có:
+
+```text
+checks/fixtures/
+  animevietsub/
+    home-latest.html
+    detail.html
+    episodes.html
+  anime47/
+    home-latest.html
+```
+
+Ràng buộc thiết kế:
+
+- `capture-fixtures.mts` **không** nằm trong `npm test`. Test parser phải offline và deterministic.
+- Capture chặn trang Cloudflare challenge ghi đè fixture tốt (`looksLikeHtml`), và mỗi target độc lập — lỗi thì skip chứ không abort cả run.
+- `parser-check.mts` override `globalThis.fetch` để throw, đảm bảo không có call mạng nào lọt qua (`getAnimeDetail` gọi `enrichWithAniList`, vốn non-throwing nên sẽ âm thầm ra mạng).
+- Assertion mang tính **cấu trúc**, không so khớp chính xác: fixture là snapshot site thật nên title/số tập đổi mỗi lần recapture. Điều bất biến là shape — card có id và title, id không trùng, số tập dương và sắp tăng, URL absolute.
+- Fixture không được publish lên npm (đã xác minh qua `pack:check`).
+
+Không capture được, có lý do:
+
+- Anime47 search đi qua JSON API, không có HTML để record.
+- AnimeVietsub `/tim-kiem/` bị challenge-gate liên tục.
+- Search ranking đã được `checks/search-check.mts` phủ bằng card tổng hợp.
+
+Bug thật phát hiện nhờ fixture:
+
+- `Anime47.getHomeCards('latest')` luôn trả về rỗng. Homepage là Quasar SPA và không còn ship `__INITIAL_STATE__` — nguồn duy nhất set `status`. Toàn bộ 59 card đến từ đường HTML và không có `status`, nên filter theo `status` xóa sạch kết quả. Đã sửa bằng cách fallback về danh sách chưa filter, và pin lại bằng assertion.
+
 ### Phase 3 — Shared scraping infrastructure
 
 - [ ] HTTP client/retry/timeout.
@@ -357,18 +405,29 @@ cli/
 
 ### Phase 4 — Refactor provider
 
-Thứ tự:
+Thứ tự (chỉ còn hai provider — AnimeHay đã abandon):
+
 1. AnimeVietsub.
 2. Anime47.
 
 Mỗi provider:
 
 - [ ] Extract pure parsers.
-- [ ] Thêm fixture tests.
+- [ ] Mở rộng fixture tests cho phần vừa tách (baseline đã có từ Phase 2.5).
 - [ ] Extract HTTP/browser client.
 - [ ] Extract stream handlers.
 - [ ] Thu nhỏ provider class.
 - [ ] Chạy contract tests.
+
+Fixture test của Phase 2.5 là lưới an toàn cho phase này: chạy `npm test` sau mỗi bước tách để phát hiện parser bị lệch hành vi. Vì assertion là structural, nó bắt được lỗi "parser trả về rỗng/sai shape" chứ không bắt được thay đổi nội dung nhỏ — với những phần đó cần thêm assertion cụ thể khi tách.
+
+Dead code cần dọn khi refactor (ESLint không thấy vì `no-unused-vars` đang tắt; phát hiện bằng `npx tsc --noEmit --noUnusedLocals --noUnusedParameters`):
+
+- `scrapers/providers/anime47.ts` — `fetchWatchDataByApi`, `inferStreamTypeFromUrl`.
+- `scrapers/providers/animevietsub.ts` — import `pickRandomProfile`, biến `hostname`.
+- `scrapers/auth-service.ts` — `buildAvsHeaders`, `A47_API` (thuộc Phase 5).
+- `scrapers/interceptor.ts` — tham số `timeout`.
+- `cli/menus/account-menu.ts` — export `showAccountMenu` không còn ai gọi; cần xác nhận trước khi xóa.
 
 ### Phase 5 — Auth subsystem
 
@@ -409,13 +468,15 @@ Mỗi provider:
 5. `Extract CLI settings menu`
 6. `Extract CLI account menu`
 7. `Extract anime watch flow`
-8. `Add shared scraper utilities`
-9. `Refactor AnimeHay provider`
+8. `Add parser fixture tests`
+9. `Add shared scraper utilities`
 10. `Refactor Anime47 provider`
 11. `Refactor AnimeVietsub provider`
 12. `Split provider auth services`
 13. `Harden Electron player`
 14. `Polish project documentation`
+
+`Refactor AnimeHay provider` đã bị loại khỏi danh sách theo quyết định abandon.
 
 ## Validation bắt buộc sau mỗi phase
 
