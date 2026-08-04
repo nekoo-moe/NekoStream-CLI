@@ -490,9 +490,12 @@ export class Anime47Provider extends BaseScraper {
       for (const item of this.parseAnimeCardsFromHtml(html)) addCard(item)
 
       if (section === 'latest') {
-        return merged
-          .filter((item) => /tập|ep|episode|\d+/i.test(String(item.status || '')))
-          .slice(0, 72)
+        // Status badges only exist on cards sourced from __INITIAL_STATE__. The
+        // site no longer ships that blob on the homepage, so every card comes
+        // from HTML and carries no status — the filter would empty the section.
+        // Fall back to the unfiltered list rather than showing the user nothing.
+        const withStatus = merged.filter((item) => /tập|ep|episode|\d+/i.test(String(item.status || '')))
+        return (withStatus.length > 0 ? withStatus : merged).slice(0, 72)
       }
       return merged.slice(0, 72)
     } catch (error) {
