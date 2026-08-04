@@ -14,6 +14,32 @@ const nodeGlobals = {
   clearTimeout: 'readonly',
 }
 
+/** Globals available inside the player window and the webview preload. */
+const browserGlobals = {
+  document: 'readonly',
+  window: 'readonly',
+  location: 'readonly',
+  localStorage: 'readonly',
+  navigator: 'readonly',
+  fetch: 'readonly',
+  URL: 'readonly',
+  Node: 'readonly',
+  Element: 'readonly',
+  HTMLElement: 'readonly',
+  MutationObserver: 'readonly',
+  XMLHttpRequest: 'readonly',
+  Image: 'readonly',
+  Event: 'readonly',
+  CustomEvent: 'readonly',
+  getComputedStyle: 'readonly',
+  requestAnimationFrame: 'readonly',
+  alert: 'readonly',
+  globalThis: 'readonly',
+  Response: 'readonly',
+  // Declared by player.html, which prepends it to the preload copy it writes.
+  __streamInfo: 'readonly',
+}
+
 export default tseslint.config(
   {
     ignores: [
@@ -22,9 +48,6 @@ export default tseslint.config(
       '.data/**',
       '.claude/**',
       'DESIGN.md',
-      'player-main.js',
-      'webview-preload.js',
-      'isolate.js',
     ],
   },
   eslint.configs.recommended,
@@ -43,6 +66,22 @@ export default tseslint.config(
       'no-useless-assignment': 'off',
       'preserve-caught-error': 'off',
       'prefer-const': 'off',
+    },
+  },
+  {
+    // The Electron layer. These three files were excluded from linting entirely
+    // until the security pass; they are in scope now, and unused-variable
+    // reporting is switched back on for them specifically because that is what
+    // catches the dead injection code this pass had to hunt down by hand.
+    files: ['player-main.js', 'webview-preload.js', 'isolate.js'],
+    languageOptions: {
+      globals: { ...nodeGlobals, ...browserGlobals },
+    },
+    rules: {
+      'no-unused-vars': ['warn', { args: 'none', caughtErrors: 'none', varsIgnorePattern: '^_' }],
+      // `var self = this` inside the XHR/fetch shims is the only way to keep the
+      // original callsite's receiver when forwarding to the native method.
+      '@typescript-eslint/no-this-alias': 'off',
     },
   }
 )

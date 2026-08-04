@@ -3,6 +3,7 @@ import path from 'path'
 import fs from 'fs'
 import os from 'os'
 import type { StreamInfo } from './scrapers/base'
+import { loadSettings } from './storage'
 
 function runWithTimeout<T>(fn: () => Promise<T>, ms: number): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -130,9 +131,15 @@ export async function launchPlayer(streamInfo: StreamInfo) {
   const basePath = isCompiled ? path.join(__dirname, '..') : __dirname
   const mainScript = path.join(basePath, 'player-main.js')
 
+  // Debug tooling in the player (DOM dumps, the Eruda console) is off unless the
+  // user turned debugMode on in settings. It is passed as an explicit flag rather
+  // than inherited so that a stray environment variable cannot enable it.
+  const debugEnabled = loadSettings().debugMode === true
+
   const env = {
     ...process.env,
-    NEKOSTREAM_CLI_STREAM: Buffer.from(JSON.stringify(streamInfo)).toString('base64')
+    NEKOSTREAM_CLI_STREAM: Buffer.from(JSON.stringify(streamInfo)).toString('base64'),
+    NEKOSTREAM_CLI_DEBUG: debugEnabled ? '1' : '0'
   }
 
   let electronBinary: string

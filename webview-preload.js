@@ -1,12 +1,41 @@
-const isIframe = window.self !== window.top;
-const currentUrl = window.location.href;
+/**
+ * Preload script for the player <webview>.
+ *
+ * Runs with nodeIntegration=no in every frame of the stream page. Its job is to
+ * survive hostile pages: fake the ad globals sites probe for, strip the overlays
+ * they show when a probe fails, and keep anti-devtools traps from freezing
+ * playback.
+ *
+ * Host checks in here go through `nekoHost` / `isProviderHost` below. Substring
+ * matches on the full URL are not used: `location.href.includes('anime47')` is
+ * true on any page that merely mentions the string in a query parameter, and
+ * this file injects auth tokens into localStorage based on that decision.
+ */
+
+/** Registrable labels of the providers we ship. */
+var NEKO_PROVIDER_LABELS = ['animevietsub', 'anime47', 'animehay'];
+
+/** Lowercased hostname of this frame. */
+var nekoHost = (window.location.hostname || '').toLowerCase();
+
+/**
+ * True when `host`'s registrable label is one of ours, so `cdn.anime47.best`
+ * matches and `anime47.attacker.example` does not.
+ */
+function nekoIsProviderHost(host, label) {
+  if (!host) return false;
+  var parts = host.split('.');
+  if (parts.length < 2) return false;
+  var found = parts[parts.length - 2];
+  if (label) return found === label;
+  return NEKO_PROVIDER_LABELS.indexOf(found) !== -1;
+}
 
 // Inject localStorage state immediately before any page scripts run
 ;(function injectLocalStorage() {
   try {
     if (typeof __streamInfo !== 'undefined' && __streamInfo && __streamInfo.localStorageState && typeof __streamInfo.localStorageState === 'object') {
-      const hostname = window.location.hostname;
-      if (hostname.includes('anime47')) {
+      if (nekoIsProviderHost(nekoHost, 'anime47')) {
         console.log('[Preload] Synchronously injecting Anime47 localStorage keys...');
         for (const [k, v] of Object.entries(__streamInfo.localStorageState)) {
           try {
@@ -29,7 +58,9 @@ const currentUrl = window.location.href;
 // ═══════════════════════════════════════════════════════════════════════════
 ;(function bypassAdblockDetection() {
   try {
-    if (window.location.hostname.includes('animevietsub')) {
+    // AVS is left alone: the site is itself the provider, and faking its ad
+    // globals breaks its player bootstrap.
+    if (nekoIsProviderHost(nekoHost, 'animevietsub')) {
       return;
     }
     // ── 1. Fake Google Ad Manager (DFP / GPT) ──────────────────────────────
@@ -121,7 +152,7 @@ const currentUrl = window.location.href;
       if (tag === 'ins' || tag === 'div') {
         const _setAttr = el.setAttribute.bind(el);
         el.setAttribute = function(name, val) {
-          _setAttr(name, val);
+          var result = _setAttr(name, val);
           if (name === 'class' && /\badsbox\b|\bad\b|\bads\b|\badsbygoogle\b/.test(val)) {
             try {
               Object.defineProperties(el, {
@@ -131,6 +162,7 @@ const currentUrl = window.location.href;
               });
             } catch(e) {}
           }
+          return result;
         };
       }
       return el;
@@ -313,12 +345,15 @@ const currentUrl = window.location.href;
 // 2. Active ad-blocking CSS injection for all frames
 window.addEventListener('DOMContentLoaded', function() {
   try {
-    if (window.location.hostname.includes('animevietsub')) return;
+    if (nekoIsProviderHost(nekoHost, 'animevietsub')) return;
     const style = document.createElement('style');
     style.textContent = [
-      'iframe[src*="in88"],iframe[src*="bet"],iframe[src*="game"],iframe[src*="nohu"],iframe[src*="quayhu"],',
-      'a[href*="in88"],a[href*="bet"],a[href*="game"],a[href*="nohu"],a[href*="quayhu"],',
-      'img[src*="in88"],img[src*="bet"],img[src*="game"],',
+      // Brand-specific fragments only. This list used to include the bare
+      // tokens "bet" and "game", which matched substrings inside legitimate
+      // player URLs and hid the controls along with the ads.
+      'iframe[src*="in88"],iframe[src*="188bet"],iframe[src*="kubet"],iframe[src*="nohu"],iframe[src*="quayhu"],',
+      'a[href*="in88"],a[href*="188bet"],a[href*="kubet"],a[href*="nohu"],a[href*="quayhu"],',
+      'img[src*="in88"],img[src*="188bet"],img[src*="kubet"],',
       'div[id*="avs-pause" i],div[class*="avs-pause" i],',
       '#avs-pause-ad,.avs-pause-ad,.avs-pause-ad-box{',
       'display:none!important;visibility:hidden!important;',
@@ -331,7 +366,7 @@ window.addEventListener('DOMContentLoaded', function() {
 // Passive and active ad removal loop
 var cleanDOM = function() {
   try {
-    if (window.location.hostname.includes('animevietsub')) return;
+    if (nekoIsProviderHost(nekoHost, 'animevietsub')) return;
     var doc = document;
     if (!doc || !doc.body) return;
 
@@ -345,8 +380,8 @@ var cleanDOM = function() {
         text === 'Quảng cáo' || text === 'Close X' ||
         text.includes('Nếu bạn không thể truy cập AnimeVietsub') ||
         src.includes('in88') ||
-        href.includes('in88') || href.includes('bet') ||
-        href.includes('game') || href.includes('quayhu') || href.includes('nohu') ||
+        href.includes('in88') || href.includes('188bet') ||
+        href.includes('kubet') || href.includes('quayhu') || href.includes('nohu') ||
         (el.tagName === 'IMG' && el.style.position === 'absolute' && parseInt(el.style.zIndex) > 100)
       ) {
         var parent = el.parentElement;
@@ -381,33 +416,45 @@ var cleanDOM = function() {
       }
     });
     
-    doc.querySelectorAll('meta[http-equiv="content-security-policy" i]').forEach(function(m) { m.remove(); });
+    // Meta-CSP removal is limited to the stream player hosts, whose pages we
+    // rewrite into a bare fullscreen iframe. Stripping it everywhere removed a
+    // real defence from every other origin the webview happened to visit.
+    if (/(^|\.)googleapiscdn\.com$|(^|\.)googleapis\.com$|(^|\.)abyss\.to$|(^|\.)hydrax\.net$/.test(nekoHost)) {
+      doc.querySelectorAll('meta[http-equiv="content-security-policy" i]').forEach(function(m) { m.remove(); });
+    }
 
   } catch (e) {}
 };
 
 setInterval(cleanDOM, 300);
 
-// 3. Inject Eruda developer console on the Google Player page
-var isPlayerPage = currentUrl.includes('googleapiscdn.com') || currentUrl.includes('googleapis.com');
+// 3. Eruda developer console — debug builds only.
+//
+// This used to run on every playback and pulled the console straight off a
+// public CDN into the stream page. That made a third-party host able to run
+// arbitrary code inside a frame that carries the user's provider cookies, on a
+// normal user's machine, with no way to turn it off. It is now opt-in and
+// served from the copy bundled in node_modules: no network fetch, and nothing
+// happens at all unless NEKOSTREAM_CLI_DEBUG=1 was set when the player started.
+var nekoDebug =
+  typeof __streamInfo !== 'undefined' && __streamInfo && __streamInfo.__nekoDebug === true;
+var nekoErudaSource =
+  typeof __streamInfo !== 'undefined' && __streamInfo ? __streamInfo.__nekoErudaSource : '';
+var isPlayerPage = /(^|\.)googleapiscdn\.com$|(^|\.)googleapis\.com$/.test(nekoHost);
 
-if (isPlayerPage) {
+if (nekoDebug && nekoErudaSource && isPlayerPage) {
   var initEruda = function() {
     try {
       if (window.eruda) return;
       var script = document.createElement('script');
-      script.src = 'https://cdn.jsdelivr.net/npm/eruda';
-      script.onload = function() {
-        if (window.eruda) window.eruda.init({ theme: 'dark', tool: ['console', 'elements', 'network', 'resources'] });
-      };
-      script.onerror = function() {
-        var fallback = document.createElement('script');
-        fallback.src = 'https://cdnjs.cloudflare.com/ajax/libs/eruda/3.0.1/eruda.min.js';
-        fallback.onload = function() { if (window.eruda) window.eruda.init({ theme: 'dark' }); };
-        document.documentElement.appendChild(fallback);
-      };
+      script.textContent = nekoErudaSource;
       document.documentElement.appendChild(script);
-    } catch (err) {}
+      if (window.eruda) {
+        window.eruda.init({ theme: 'dark', tool: ['console', 'elements', 'network', 'resources'] });
+      }
+    } catch (err) {
+      console.error('[Preload] Eruda init failed:', err);
+    }
   };
 
   if (document.readyState === 'loading') {

@@ -157,39 +157,76 @@ type AuthSessionsMap = Partial<Record<ProviderId, AuthSession>>
 
 /**
  * Derive a stable 32-byte encryption key from machine identity.
- * Not cryptographically robust against local admin access,
- * but sufficient to prevent casual reading of the JSON file.
+ *
+ * This is obfuscation-at-rest, not a secret: anyone who can run code as this
+ * user can re-derive the key. Its only job is to stop session cookies from
+ * being readable by a casual file browse, a backup tool or a support log.
+ * Anything stronger needs an OS keychain, which is tracked as future work.
  */
 function deriveEncryptionKey(): Buffer {
   const seed = `nekostream-cli:${os.hostname()}:${os.userInfo().username}:auth-v1`
   return crypto.createHash('sha256').update(seed).digest()
 }
 
+/**
+ * AES-256-GCM: the authentication tag makes tampering detectable. The previous
+ * format was AES-256-CBC with no tag, so a modified ciphertext decrypted into
+ * attacker-influenced plaintext that then went straight into JSON.parse and out
+ * as cookies. Payloads are prefixed so old records stay readable (see decrypt).
+ */
+const GCM_PREFIX = 'gcm1:'
+
 function encryptPayload(raw: string): string {
-  try {
-    const key = deriveEncryptionKey()
-    const iv = crypto.randomBytes(16)
-    const cipher = crypto.createCipheriv('aes-256-cbc', key, iv)
-    const encrypted = Buffer.concat([cipher.update(raw, 'utf8'), cipher.final()])
-    return iv.toString('hex') + ':' + encrypted.toString('base64')
-  } catch {
-    // Fallback: plain base64 if crypto fails
-    return 'plain:' + Buffer.from(raw, 'utf8').toString('base64')
-  }
+  // Deliberately unguarded: a crypto failure must surface, not silently
+  // downgrade the payload to plaintext.
+  const key = deriveEncryptionKey()
+  const iv = crypto.randomBytes(12)
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv)
+  const encrypted = Buffer.concat([cipher.update(raw, 'utf8'), cipher.final()])
+  const tag = cipher.getAuthTag()
+  return (
+    GCM_PREFIX +
+    iv.toString('hex') +
+    ':' +
+    tag.toString('hex') +
+    ':' +
+    encrypted.toString('base64')
+  )
 }
 
 function decryptPayload(encoded: string): string | null {
-  try {
-    if (encoded.startsWith('plain:')) {
-      return Buffer.from(encoded.slice(6), 'base64').toString('utf8')
+  const key = deriveEncryptionKey()
+
+  if (encoded.startsWith(GCM_PREFIX)) {
+    try {
+      const [ivHex, tagHex, encryptedB64] = encoded.slice(GCM_PREFIX.length).split(':')
+      if (!ivHex || !tagHex || !encryptedB64) return null
+      const decipher = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(ivHex, 'hex'))
+      decipher.setAuthTag(Buffer.from(tagHex, 'hex'))
+      const plaintext = Buffer.concat([
+        decipher.update(Buffer.from(encryptedB64, 'base64')),
+        decipher.final()
+      ])
+      return plaintext.toString('utf8')
+    } catch {
+      // final() throws when the tag does not verify — treat as no session
+      // rather than trusting the bytes.
+      return null
     }
+  }
+
+  // Legacy AES-256-CBC records written before the GCM migration. Read-only:
+  // they are re-encrypted as GCM the next time the session is saved. The old
+  // `plain:` base64 escape hatch is intentionally *not* accepted — honouring it
+  // let anyone downgrade a session file to unauthenticated plaintext.
+  try {
     const [ivHex, encryptedB64] = encoded.split(':')
     if (!ivHex || !encryptedB64) return null
-    const key = deriveEncryptionKey()
-    const iv = Buffer.from(ivHex, 'hex')
-    const encrypted = Buffer.from(encryptedB64, 'base64')
-    const decipher = crypto.createDecipheriv('aes-256-cbc', key, iv)
-    return Buffer.concat([decipher.update(encrypted), decipher.final()]).toString('utf8')
+    const decipher = crypto.createDecipheriv('aes-256-cbc', key, Buffer.from(ivHex, 'hex'))
+    return Buffer.concat([
+      decipher.update(Buffer.from(encryptedB64, 'base64')),
+      decipher.final()
+    ]).toString('utf8')
   } catch {
     return null
   }
@@ -220,7 +257,17 @@ function saveAuthSessionsRaw(sessions: AuthSessionsMap): void {
   for (const [provider, session] of Object.entries(sessions)) {
     encoded[provider] = encryptPayload(JSON.stringify(session))
   }
-  fs.writeFileSync(AUTH_SESSIONS_FILE, JSON.stringify(encoded, null, 2), 'utf-8')
+  // 0600: the file holds live session cookies, so other local users have no
+  // business reading it. Ignored by Windows ACLs, honoured everywhere else.
+  fs.writeFileSync(AUTH_SESSIONS_FILE, JSON.stringify(encoded, null, 2), {
+    encoding: 'utf-8',
+    mode: 0o600
+  })
+  try {
+    fs.chmodSync(AUTH_SESSIONS_FILE, 0o600)
+  } catch {
+    // Pre-existing file on a filesystem without POSIX modes; nothing to do.
+  }
 }
 
 export function loadAuthSession(provider: ProviderId): AuthSession | null {
