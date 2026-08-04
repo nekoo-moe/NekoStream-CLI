@@ -1,0 +1,7 @@
+dist/
+node_modules/
+.data/
+.claude/
+dom-dump.html
+issues.json
+package-lock.json

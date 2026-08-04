@@ -469,7 +469,6 @@ export class AnimeVietsubProvider extends BaseScraper {
     // Stealth
     await context.addInitScript(() => {
       Object.defineProperty(navigator, 'webdriver', { get: () => undefined })
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       ;(globalThis as any).chrome = { runtime: {} }
       Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] })
       Object.defineProperty(navigator, 'languages', { get: () => ['vi-VN', 'vi', 'en-US', 'en'] })
