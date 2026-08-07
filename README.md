@@ -139,6 +139,19 @@ Repo này hoan nghênh cả hai loại đóng góp:
 - Dự án không thu thập dữ liệu cá nhân. Toàn bộ lịch sử và session nằm trong `~/.nekostream-cli/` trên máy bạn.
 - Vui lòng sử dụng có trách nhiệm và tuân thủ điều khoản của từng provider.
 
+> [!WARNING]
+> **Mã nguồn của trang web không đồng nghĩa bạn được phép bê nguyên lại, hãy có tính sáng tạo cho riêng mình.**
+>
+> * **Trạng thái dự án:** Mã nguồn đã được **Archive từ ngày 02/07/2026**. Chúng tôi hoàn toàn **ngừng bảo trì** và sẽ **không chịu trách nhiệm** cho bất kỳ lỗi bảo mật, lỗi thiết kế, và các vấn đề liên quan nào phát sinh từ mã nguồn này.
+> * **Miễn trừ trách nhiệm:** Chúng tôi, **NekoTech**, không liên quan và không chịu bất kỳ trách nhiệm nào đối với các sự cố, thiệt hại hoặc hậu quả pháp lý phát sinh từ việc bạn tự ý fork, sao chép hoặc sử dụng lại mã nguồn này cho mục đích cá nhân hay thương mại.
+
+> [!CAUTION]
+> ### TUYÊN BỐ MIỄN TRỪ TRÁCH NHIỆM PHÁP LÝ (DISCLAIMER)
+>
+> 1. **Sử dụng với rủi ro tự chịu (As-Is):** Mã nguồn này được cung cấp theo nguyên trạng "như hiện có" mà không có bất kỳ sự đảm bảo nào, dù là rõ ràng hay ngầm định, bao gồm nhưng không giới hạn ở các bảo đảm về khả năng thương mại hoặc tính phù hợp cho một mục đích cụ thể.
+> 2. **Giới hạn trách nhiệm:** Trong mọi trường hợp, **NekoTech** cũng như các thành viên phát triển không chịu trách nhiệm pháp lý đối với bất kỳ khiếu nại, thiệt hại hoặc tổn thất nào (bao gồm tổn thất dữ liệu, lỗ hổng bảo mật, hoặc thiệt hại về tài chính) phát sinh từ hoặc có liên quan đến việc sử dụng, sửa đổi, hoặc phân phối mã nguồn này.
+> 3. **Không hỗ trợ pháp lý:** Việc bạn sử dụng lại mã nguồn để vận hành các dịch vụ công cộng hoặc thương mại tự chịu hoàn toàn trách nhiệm trước pháp luật hiện hành. NekoTech không có nghĩa vụ bảo vệ, can thiệp hoặc chịu trách nhiệm thay cho bất kỳ hành vi vi phạm bản quyền hay pháp lý nào từ phía bên thứ ba.
+
 <div align="center">
 
 </div>
